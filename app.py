@@ -26,7 +26,7 @@ except ImportError:
 # ==========================================
 # 🛑 COLE O ID DA SUA PLANILHA AQUI ABAIXO:
 # ==========================================
-PLANILHA_ID = "COLE_AQUI_O_SEU_ID_GIGANTE"
+PLANILHA_ID = "1TKD0UaTm-wxALJ426T19RjXldPHA-DkJ40BbdN9wS80"
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="AutoPosto Pro", page_icon="⛽", layout="wide", initial_sidebar_state="expanded")
