@@ -23,6 +23,13 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
 
+# --- IMPORTAÇÕES DE COOKIES (MANTER LOGADO) ---
+try:
+    import extra_streamlit_components as stx
+    HAS_COOKIES = True
+except ImportError:
+    HAS_COOKIES = False
+
 # ==========================================
 # 🛑 PUXANDO O ID DA PLANILHA DO COFRE SECRETO:
 # ==========================================
@@ -57,7 +64,6 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
 
 # ==========================================
 # MOTOR DE BANCO DE DADOS (GOOGLE SHEETS)
@@ -114,7 +120,6 @@ def carregar_dados():
         
         st.session_state['aniversarios'] = load_ws('aniversarios', ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
         
-        # Carrega o histórico de Logins
         st.session_state['log_acessos'] = load_ws('log_acessos', ['Data/Hora', 'Usuário', 'Perfil'])
         
     except Exception as e:
@@ -130,7 +135,6 @@ def salvar_dados():
         def save_ws(name, df):
             try: ws = doc.worksheet(name)
             except gspread.exceptions.WorksheetNotFound: ws = doc.add_worksheet(title=name, rows="1000", cols="20")
-            
             ws.clear()
             df_clean = df.fillna("").astype(str)
             dados = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
@@ -144,7 +148,7 @@ def salvar_dados():
         save_ws('config', st.session_state['config'])
         save_ws('aniversarios', st.session_state['aniversarios'])
         save_ws('usuarios', st.session_state['usuarios'])
-        save_ws('log_acessos', st.session_state['log_acessos']) # Salva os logins
+        save_ws('log_acessos', st.session_state['log_acessos'])
         
         log_df = pd.DataFrame(st.session_state['processados_list']) if st.session_state['processados_list'] else pd.DataFrame(columns=['id', 'Arquivo', 'Mês', 'Tipo'])
         save_ws('log', log_df)
@@ -152,16 +156,35 @@ def salvar_dados():
         st.error(f"🛑 Erro ao salvar os dados na nuvem: {e}")
         st.stop()
 
+# ==========================================
+# 🔐 GERENCIADOR DE COOKIES E LOGIN
+# ==========================================
+cookie_manager = None
+if HAS_COOKIES:
+    @st.cache_resource(experimental_allow_widgets=True, show_spinner=False)
+    def get_cookie_manager():
+        return stx.CookieManager()
+    cookie_manager = get_cookie_manager()
 
-# ==========================================
-# 🔐 SISTEMA DE LOGIN E SEGURANÇA
-# ==========================================
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
     st.session_state['usuario_logado'] = ""
     st.session_state['perfil_logado'] = ""
 
+# Verifica se o usuário já tem o cookie salvo no navegador
+if not st.session_state['autenticado'] and cookie_manager is not None:
+    c_user = cookie_manager.get(cookie="user_posto")
+    c_perfil = cookie_manager.get(cookie="perfil_posto")
+    if c_user and c_perfil:
+        st.session_state['autenticado'] = True
+        st.session_state['usuario_logado'] = str(c_user)
+        st.session_state['perfil_logado'] = str(c_perfil)
+        st.rerun()
+
 if not st.session_state['autenticado']:
+    if not HAS_COOKIES:
+        st.warning("⚠️ Instale a biblioteca 'extra-streamlit-components' para manter-se logado ao atualizar a página.")
+        
     st.markdown("<br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
@@ -202,20 +225,22 @@ if not st.session_state['autenticado']:
                                 user_valido = True
                         
                         if user_valido:
-                            # 🚨 REGISTRA O LOGIN NA CÂMERA DE SEGURANÇA
-                            agora = datetime.utcnow() - timedelta(hours=3) # Ajusta para fuso do Brasil
-                            novo_log = pd.DataFrame([{
-                                'Data/Hora': agora.strftime("%d/%m/%Y %H:%M:%S"), 
-                                'Usuário': st.session_state['usuario_logado'], 
-                                'Perfil': st.session_state['perfil_logado']
-                            }])
+                            # Registra o acesso no banco de dados
+                            agora = datetime.utcnow() - timedelta(hours=3) 
+                            novo_log = pd.DataFrame([{'Data/Hora': agora.strftime("%d/%m/%Y %H:%M:%S"), 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado']}])
                             st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil'])), novo_log], ignore_index=True)
-                            salvar_dados() # Salva a informação na hora no Google
+                            salvar_dados()
+                            
+                            # Salva o Carimbo no Navegador por 30 dias
+                            if cookie_manager is not None:
+                                cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60, key="set_u")
+                                cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="set_p")
+                                
                             st.rerun()
                         else: st.error("❌ Usuário ou senha incorretos ou inativos!")
     st.stop() 
 
-# Carrega os dados para quem já logou
+# Carrega os dados da nuvem para quem já está logado
 if 'empresas' not in st.session_state:
     with st.spinner("Conectando ao Servidor Google..."):
         carregar_dados()
@@ -306,28 +331,23 @@ with st.sidebar:
     
     opcoes_menu = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
     
-    # O menu de Acessos só aparece se o perfil for Admin
     if st.session_state['perfil_logado'] == 'Admin':
         opcoes_menu.append("🔐 Gestão de Acessos")
         
     menu = st.radio("Navegação do Sistema", opcoes_menu)
     st.markdown("---")
     
-    # BOTÃO NATIVO DE ATUALIZAR DADOS (Substitui o uso do F5)
-    if st.button("🔄 Atualizar Dados do Google", use_container_width=True, help="Clique aqui para atualizar as informações sem deslogar"):
-        with st.spinner("Buscando dados no Google..."):
-            carregar_dados()
-        st.success("Dados Atualizados!")
-        st.rerun()
-
     if st.button("🚪 Sair do Sistema", use_container_width=True):
+        if cookie_manager is not None:
+            cookie_manager.delete("user_posto", key="del_u")
+            cookie_manager.delete("perfil_posto", key="del_p")
         st.session_state['autenticado'] = False
         st.session_state['usuario_logado'] = ""
         st.session_state['perfil_logado'] = ""
         st.rerun()
         
     st.markdown("---")
-    st.caption("Versão 6.2 | Auditoria & Sync")
+    st.caption("Versão 6.3 | Cookies & Auditoria")
 
 # ==========================================
 # FUNÇÃO DE CÁLCULO GERAL
@@ -452,9 +472,7 @@ if menu == "🔐 Gestão de Acessos":
         if df_logs.empty:
             st.info("Nenhum acesso registrado ainda. Os próximos logins aparecerão aqui.")
         else:
-            # Mostra os registros mais recentes primeiro (inverte a ordem da tabela)
             st.dataframe(df_logs.iloc[::-1], use_container_width=True, hide_index=True)
-
 
 # ==========================================
 # TELAS DE CADASTRO
