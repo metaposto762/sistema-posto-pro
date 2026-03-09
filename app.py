@@ -239,8 +239,8 @@ if not st.session_state['autenticado']:
                             
                             # Salva o Carimbo no Navegador por 30 dias
                             if cookie_manager is not None:
-                                cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60)
-                                cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60)
+                                cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60, key="set_u")
+                                cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="set_p")
                                 time.sleep(1.0) # Freio para garantir que o navegador guardou a chave ANTES de entrar!
                                 
                             st.rerun()
@@ -354,8 +354,8 @@ with st.sidebar:
     if st.button("🚪 Sair do Sistema", use_container_width=True):
         with st.spinner("Saindo com segurança..."):
             if cookie_manager is not None:
-                cookie_manager.delete("user_posto")
-                cookie_manager.delete("perfil_posto")
+                cookie_manager.delete("user_posto", key="del_u")
+                cookie_manager.delete("perfil_posto", key="del_p")
                 time.sleep(1.0) # Freio para garantir que o navegador jogou a chave fora
             
             # Limpa toda a memória da sessão como uma bomba nuclear!
