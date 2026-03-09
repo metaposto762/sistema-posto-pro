@@ -3,7 +3,7 @@ import pandas as pd
 import re
 import os
 import io
-import time # Motor de tempo adicionado!
+import time 
 from datetime import datetime, timedelta
 
 # --- IMPORTAÇÕES DO GOOGLE SHEETS ---
@@ -169,23 +169,26 @@ if 'autenticado' not in st.session_state:
     st.session_state['usuario_logado'] = ""
     st.session_state['perfil_logado'] = ""
 
-# 🔄 FREIO ANTI-F5 E RECUPERAÇÃO DE SESSÃO
+# 🔄 FREIO ANTI-F5 E RECUPERAÇÃO DE SESSÃO (ANTI-FANTASMA)
 if not st.session_state['autenticado'] and cookie_manager is not None:
-    cookies_salvos = cookie_manager.get_all()
-    
-    # Se o navegador respondeu e achou a chave
-    if isinstance(cookies_salvos, dict) and "user_posto" in cookies_salvos and cookies_salvos["user_posto"]:
-        st.session_state['autenticado'] = True
-        st.session_state['usuario_logado'] = str(cookies_salvos["user_posto"])
-        st.session_state['perfil_logado'] = str(cookies_salvos.get("perfil_posto", "Operador"))
-        st.rerun()
+    if st.session_state.get('ignorar_cookie_temporario', False):
+        # Se acabou de clicar em SAIR, ignora qualquer memória antiga do navegador
+        pass 
     else:
-        # Se não achou, pode ser porque o navegador foi lento (clássico ao apertar F5).
-        # Vamos piscar a tela e tentar de novo em meio segundo antes de deslogar.
-        if 'esperou_f5' not in st.session_state:
-            st.session_state['esperou_f5'] = True
-            time.sleep(0.6) # Freio mágico 🪄
+        cookies_salvos = cookie_manager.get_all()
+        
+        # Se o navegador respondeu e achou a chave
+        if isinstance(cookies_salvos, dict) and "user_posto" in cookies_salvos and cookies_salvos["user_posto"]:
+            st.session_state['autenticado'] = True
+            st.session_state['usuario_logado'] = str(cookies_salvos["user_posto"])
+            st.session_state['perfil_logado'] = str(cookies_salvos.get("perfil_posto", "Operador"))
             st.rerun()
+        else:
+            # Se não achou, pode ser porque o navegador foi lento no F5.
+            if 'esperou_f5' not in st.session_state:
+                st.session_state['esperou_f5'] = True
+                time.sleep(0.6) # Freio mágico 🪄
+                st.rerun()
 
 if not st.session_state['autenticado']:
     if not HAS_COOKIES:
@@ -237,7 +240,7 @@ if not st.session_state['autenticado']:
                             st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil'])), novo_log], ignore_index=True)
                             salvar_dados()
                             
-                            # Salva o Carimbo no Navegador por 30 dias
+                            # Salva o Carimbo no Navegador por 30 dias (COM AS KEYS CORRETAS)
                             if cookie_manager is not None:
                                 cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60, key="set_u")
                                 cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="set_p")
@@ -350,29 +353,23 @@ with st.sidebar:
         st.success("Dados Atualizados!")
         st.rerun()
 
-    # BOTÃO DEFINITIVO DE SAIR
+    # BOTÃO DEFINITIVO DE SAIR (ANTI-FANTASMA E ANTI-ERRO)
     if st.button("🚪 Sair do Sistema", use_container_width=True):
         with st.spinner("Saindo com segurança..."):
             if cookie_manager is not None:
-                # Tenta deletar. Se o cookie já sumiu, ele ignora o erro e segue o baile!
-                try:
-                    cookie_manager.delete("user_posto", key="del_u")
-                except KeyError:
-                    pass
-                
-                try:
-                    cookie_manager.delete("perfil_posto", key="del_p")
-                except KeyError:
-                    pass
-                    
-                time.sleep(1.0) # Freio para garantir que o navegador jogou a chave fora
+                # Sobrescreve com vazio para matar o cookie instantaneamente
+                cookie_manager.set("user_posto", "", max_age=0, key="kill_u")
+                cookie_manager.set("perfil_posto", "", max_age=0, key="kill_p")
+                time.sleep(1.0) 
             
-            # Limpa toda a memória da sessão como uma bomba nuclear!
+            # Limpa toda a memória da sessão
             st.session_state.clear()
+            # Trava para impedir re-login fantasma
+            st.session_state['ignorar_cookie_temporario'] = True 
             st.rerun()
         
     st.markdown("---")
-    st.caption("Versão 6.6 | Sessão Blindada")
+    st.caption("Versão 6.7 | Ultimate")
 
 # ==========================================
 # FUNÇÃO DE CÁLCULO GERAL
