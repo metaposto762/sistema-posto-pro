@@ -253,23 +253,19 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
     if not df.empty:
         df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
         
-        # 🧠 CÉREBRO MATEMÁTICO AVANÇADO (Ignora almoço e Entende 1h15m como Tarde)
         def extrair_horas(t):
             matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
             if len(matches) >= 2:
-                # Pega SEMPRE a primeira entrada e a última saída
                 h1, m1 = matches[0]
                 h2, m2 = matches[-1]
                 t1 = int(h1)*60 + (int(m1) if m1 else 0)
                 t2 = int(h2)*60 + (int(m2) if m2 else 0)
                 
                 if t2 <= t1: 
-                    t2 += 24*60 # Virou a noite
+                    t2 += 24*60
                     
                 total_horas = (t2 - t1) / 60.0
                 
-                # Heurística Humana: Se deu mais de 15h trabalhadas e a hora final era < 12 (Ex: 1h15m)
-                # Significa que a pessoa escreveu no formato AM/PM. Corrigimos subtraindo 12h.
                 if total_horas > 15.0 and int(h2) < 12:
                     total_horas -= 12.0
                     
@@ -278,10 +274,7 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
 
         if 'Turno' in df.columns:
             df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
-            
-            # 🚀 RETORNO DA REGRA DE AGRUPAMENTO (Se for menor que 12h, agrupa!)
             df['Caixa_Visual'] = df.apply(lambda r: f"⏳ Turnos Agrupados ({r['Carga_Horaria']}h)" if r['Carga_Horaria'] < 12.0 else f"🕒 Turno: {r['Turno']}", axis=1)
-            
             df['Qtd_Caixa'] = df.groupby(['Posto', 'Caixa_Visual'])['Nome'].transform('count')
 
             for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
@@ -392,7 +385,8 @@ with st.sidebar:
     st.write(f"Usuário Logado: **{st.session_state['usuario_logado']}**")
     st.markdown("---")
     
-    paginas = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
+    # 🚀 ADICIONADO O MENU ESCALA MENSAL SEPARADO!
+    paginas = ["📊 Painel Geral", "💰 Bonificação", "📅 Escala Mensal", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
     if st.session_state['perfil_logado'] == "Admin": paginas.append("🔐 Gestão de Acessos")
     menu = st.radio("Navegação do Sistema", paginas)
     
@@ -413,7 +407,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 13.1 | Mente Brilhante")
+    st.caption("Versão 14.0 | Escala Master")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -581,6 +575,187 @@ elif menu == "💰 Bonificação":
             st.download_button("📊 Baixar Folha (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Folha_{mes_sel_b}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.info("Nenhum colaborador ativo.")
+
+# --- NOVO MENU: TELA ESCALA MENSAL DEDICADA ---
+elif menu == "📅 Escala Mensal":
+    st.header("📅 Gestão de Escala Mensal (12x36)")
+    st.info("O sistema lê o seu **Relatório Visual 12x36**, detecta a **Empresa e o Mês**, e auto-cadastra Empresa, Nomes e Turnos!")
+    
+    with st.container(border=True):
+        col1, col2 = st.columns(2)
+        mes_ref_escala = col1.text_input("Mês da Escala", value="🔍 Auto-Detectar (Ou digite MM/YYYY)")
+        
+        opcoes_posto = ["🔍 Detectar Automaticamente (Topo da Planilha)"]
+        if not st.session_state['empresas'].empty:
+            opcoes_posto.extend(list(st.session_state['empresas']['Posto']))
+        posto_lote_escala = col2.selectbox("Vincular a qual Posto?", opcoes_posto)
+        
+        arq_escala = st.file_uploader("Upload da Planilha de Escala", type=["xlsx", "xls", "csv"], key="up_escala")
+        
+        if arq_escala and st.button("🚀 Processar e Auto-Cadastrar", type="primary"):
+            try:
+                is_excel = arq_escala.name.endswith(('.xlsx', '.xls'))
+                sheet_names = pd.ExcelFile(arq_escala).sheet_names if is_excel else ['CSV_Unico']
+                
+                novas_escalas = []
+                palavras_ignoradas = ["", "NAN", "SEGUNDA A SEXTA", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "SABADO", "DOMINGO", "DOMINGO / FERIADO VERMELHO", "FERIADO", "NOMES", "IMPAR - PAR", "IMPAR", "PAR", "ESCALA DA COPA", "ESCALA", "HORÁRIO", "HORARIO"]
+                
+                for sheet in sheet_names:
+                    df_e = pd.read_excel(arq_escala, sheet_name=sheet, header=None) if is_excel else pd.read_csv(arq_escala, header=None, sep=None, engine='python', encoding='utf-8-sig')
+                    
+                    posto_atual = None
+                    mes_final = mes_ref_escala
+                    
+                    if "Auto-Detectar" in mes_ref_escala:
+                        m_file = re.search(r'(0[1-9]|1[0-2])[-_](20[2-3][0-9])', arq_escala.name)
+                        if m_file:
+                            mes_final = f"{m_file.group(1)}/{m_file.group(2)}"
+                        else:
+                            encontrou_mes = False
+                            meses_map = {'JANEIRO':'01', 'FEVEREIRO':'02', 'MARÇO':'03', 'MARCO':'03', 'ABRIL':'04', 'MAIO':'05', 'JUNHO':'06', 'JULHO':'07', 'AGOSTO':'08', 'SETEMBRO':'09', 'OUTUBRO':'10', 'NOVEMBRO':'11', 'DEZEMBRO':'12'}
+                            for _, row in df_e.head(15).iterrows():
+                                linha_texto = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+                                m_txt = re.search(r'(0[1-9]|1[0-2])/(20[2-3][0-9])', linha_texto)
+                                if m_txt:
+                                    mes_final = f"{m_txt.group(1)}/{m_txt.group(2)}"
+                                    encontrou_mes = True
+                                    break
+                                for m_nome, m_num in meses_map.items():
+                                    if m_nome in linha_texto:
+                                        ano_m = re.search(r'20[2-3][0-9]', linha_texto)
+                                        ano_str = ano_m.group(0) if ano_m else datetime.today().strftime("%Y")
+                                        mes_final = f"{m_num}/{ano_str}"
+                                        encontrou_mes = True
+                                        break
+                                if encontrou_mes: break
+                            if not encontrou_mes:
+                                mes_final = datetime.today().strftime("%m/%Y")
+                    
+                    for idx, row in df_e.iterrows():
+                        if len(row) > 1:
+                            col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
+                            col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
+                            
+                            if posto_atual is None and posto_lote_escala == "🔍 Detectar Automaticamente (Topo da Planilha)":
+                                for val in [col0, col1]:
+                                    val_up = val.upper()
+                                    if val_up and val_up not in palavras_ignoradas and not re.search(r'\d{1,2}H', val_up) and not val_up.isnumeric() and not "/" in val_up:
+                                        posto_atual = val_up
+                                        break
+                            
+                            posto_final = posto_atual if posto_atual else (posto_lote_escala if posto_lote_escala != "🔍 Detectar Automaticamente (Topo da Planilha)" else "POSTO NÃO IDENTIFICADO")
+                            
+                            col0_up = col0.upper()
+                            col1_up = col1.upper()
+                            
+                            if "H" in col0_up and col1_up != "":
+                                cargo = "Frentista"
+                                if "CX DIA" in col0_up: cargo = "CX MANHÃ"
+                                elif "CX NOITE" in col0_up: cargo = "CX NOITE"
+                                
+                                turno_limpo = col0_up.replace("- CX DIA", "").replace("CX DIA", "").replace("- CX NOITE", "").replace("CX NOITE", "").strip()
+                                
+                                if "-" in col1_up and "IMPAR" not in col1_up:
+                                    nomes = col1_up.split("-")
+                                    if len(nomes) >= 2:
+                                        nome_impar = nomes[0].strip()
+                                        nome_par = nomes[1].strip()
+                                        
+                                        if nome_impar: novas_escalas.append({'Mes': mes_final, 'Nome': nome_impar, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
+                                        if nome_par: novas_escalas.append({'Mes': mes_final, 'Nome': nome_par, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
+                                
+                                elif "IMPAR" not in col1_up and "-" not in col1_up:
+                                    nome_unico = col1_up.strip()
+                                    if nome_unico not in ["NAN", ""]:
+                                        novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
+                                
+                if novas_escalas:
+                    df_nova_escala = pd.DataFrame(novas_escalas)
+                    
+                    if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
+                    if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
+                        st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
+                    st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
+                    
+                    qtd_postos_novos = 0
+                    qtd_turnos_novos = 0
+                    qtd_colabs_novos = 0
+                    
+                    postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
+                    postos_na_planilha = df_nova_escala['Posto'].unique()
+                    
+                    novas_empresas_df = []
+                    for p in postos_na_planilha:
+                        if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
+                            novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'})
+                            qtd_postos_novos += 1
+                            
+                    if novas_empresas_df:
+                        st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
+
+                    turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
+                    turnos_na_planilha = df_nova_escala['Turno'].unique()
+                    
+                    novos_turnos_df = []
+                    for t in turnos_na_planilha:
+                        if t not in turnos_existentes:
+                            novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'})
+                            qtd_turnos_novos += 1
+                            
+                    if novos_turnos_df:
+                        st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
+                        
+                    nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
+                    nomes_processados_agora = set() 
+                    novos_colabs_df = []
+                    
+                    for _, row in df_nova_escala.iterrows():
+                        nome_val = row['Nome']
+                        if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
+                            novos_colabs_df.append({
+                                'Posto': row['Posto'],
+                                'Turno': row['Turno'],
+                                'Cargo': row['Cargo'],
+                                'Nome': nome_val,
+                                'Status': 'Ativo'
+                            })
+                            nomes_processados_agora.add(nome_val)
+                            qtd_colabs_novos += 1
+                            
+                    if novos_colabs_df:
+                        st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
+
+                    salvar_dados()
+                    
+                    mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
+                    if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
+                    if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
+                    if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
+                    
+                    st.success(mensagem_final)
+                    time.sleep(3) 
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Não encontrei o padrão de horários e nomes na planilha. Revise o arquivo.")
+            except Exception as e:
+                st.error(f"Erro ao processar o arquivo: {e}")
+
+    if not st.session_state.get('escalas', pd.DataFrame()).empty:
+        st.markdown("---")
+        st.subheader("📋 Banco de Escalas Mensais")
+        
+        c_del1, c_del2 = st.columns([2, 1])
+        meses_salvos = sorted(st.session_state['escalas']['Mes'].unique(), reverse=True)
+        mes_excluir = c_del1.selectbox("Selecione o Mês para Excluir a Escala", meses_salvos)
+        
+        if c_del2.button("🗑️ Excluir Escala do Mês", type="primary", use_container_width=True):
+            st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_excluir]
+            salvar_dados()
+            st.success(f"🗑️ A escala de {mes_excluir} foi removida permanentemente!")
+            time.sleep(1.5)
+            st.rerun()
+            
+        st.dataframe(st.session_state['escalas'].iloc[::-1], use_container_width=True, hide_index=True)
 
 # --- TELA: ANIVERSARIANTES ---
 elif menu == "🎂 Aniversariantes":
@@ -902,302 +1077,120 @@ elif menu == "👤 Cadastro Colaborador":
                         time.sleep(1.5)
                         st.rerun()
 
-# --- TELA: IMPORTAR PLANILHAS ---
+# --- TELA: IMPORTAR PLANILHAS DE VENDAS ---
 elif menu == "📈 Importar Planilhas":
-    st.header("📈 Importação de Resultados e Escalas")
+    st.header("📈 Importação de Resultados (Vendas e Metas)")
     
-    aba_vendas, aba_escala = st.tabs(["📊 Vendas e Metas", "📅 Escala Mensal Inteligente"])
-    
-    with aba_vendas:
-        col_u, col_h = st.columns([1.5, 1])
-        with col_u:
-            with st.container(border=True):
-                st.markdown("**Importar Vendas de Frentistas e Planilhas de Metas**")
-                arquivos = st.file_uploader("Suba as planilhas (Excel ou CSV)", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
-                if arquivos:
-                    if st.button(f"🚀 Processar {len(arquivos)} Arquivos", type="primary"):
-                        ids_existentes = [item['id'] for item in st.session_state['processados_list']]
-                        for arq in arquivos:
-                            id_arq = f"{arq.name}_{arq.size}"
-                            if id_arq in ids_existentes: continue
-                            try:
-                                arq.seek(0)
-                                df_b = pd.read_excel(arq, header=None) if arq.name.endswith(('.xlsx', '.xls')) else pd.read_csv(arq, header=None, sep=None, engine='python', encoding='utf-8-sig')
-                                
-                                linha_cab, tipo_rel, col_alvo, item_nome, mes_ref = None, None, None, "", "DESCONHECIDO"
+    col_u, col_h = st.columns([1.5, 1])
+    with col_u:
+        with st.container(border=True):
+            st.markdown("**Importar Vendas de Frentistas e Planilhas de Metas**")
+            arquivos = st.file_uploader("Suba as planilhas (Excel ou CSV)", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
+            if arquivos:
+                if st.button(f"🚀 Processar {len(arquivos)} Arquivos", type="primary"):
+                    ids_existentes = [item['id'] for item in st.session_state['processados_list']]
+                    for arq in arquivos:
+                        id_arq = f"{arq.name}_{arq.size}"
+                        if id_arq in ids_existentes: continue
+                        try:
+                            arq.seek(0)
+                            df_b = pd.read_excel(arq, header=None) if arq.name.endswith(('.xlsx', '.xls')) else pd.read_csv(arq, header=None, sep=None, engine='python', encoding='utf-8-sig')
+                            
+                            linha_cab, tipo_rel, col_alvo, item_nome, mes_ref = None, None, None, "", "DESCONHECIDO"
 
-                                for idx, row in df_b.head(30).iterrows():
-                                    l_str = " ".join([str(v).upper() for v in row.values if pd.notna(v)])
-                                    if 'PERÍODO:' in l_str or 'PERIODO:' in l_str:
-                                        m = re.search(r'(\d{2})/(\d{2})/(\d{4})', l_str)
-                                        if m: mes_ref = f"{m.group(2)}/{m.group(3)}"
-                                        
-                                    if 'ATENDENTE' in l_str and any(x in l_str for x in ['NR. VENDAS', 'Nº VENDAS']):
-                                        linha_cab, tipo_rel, col_alvo, item_nome = idx, "ATEND", "Atendimentos", "ATENDIMENTOS"
-                                    elif 'ATENDENTE' in l_str and 'QUANTIDADE' in l_str:
-                                        linha_cab, tipo_rel = idx, "COMB"
-                                    elif 'HORA' in l_str and 'LITRAGEM' in l_str:
-                                        linha_cab, tipo_rel, item_nome = idx, "METAS", "METAS CAIXA (SINTÉTICO)"
-
-                                if tipo_rel == "COMB":
-                                    for idx, row in df_b.head(30).iterrows():
-                                        t = ' '.join([str(v) for v in row.values if pd.notna(v)]).upper()
-                                        if 'IDENTIFICAÇÃO DO ITEM' in t:
-                                            item_nome = t.split(':', 1)[1].split('-', 1)[-1].strip()
-                                            break
-                                    if 'COMUM' in item_nome: col_alvo = 'GC'
-                                    elif 'ADITIVADA' in item_nome: col_alvo = 'GA'
-                                    elif 'S10' in item_nome: col_alvo = 'S10 - A'
-                                    elif 'ETANOL' in item_nome: col_alvo = 'ETANOL'
-
-                                if linha_cab is not None:
-                                    arq.seek(0)
-                                    df_l = pd.read_excel(arq, header=linha_cab) if arq.name.endswith(('.xlsx', '.xls')) else pd.read_csv(arq, header=linha_cab, sep=None, engine='python', encoding='utf-8-sig')
+                            for idx, row in df_b.head(30).iterrows():
+                                l_str = " ".join([str(v).upper() for v in row.values if pd.notna(v)])
+                                if 'PERÍODO:' in l_str or 'PERIODO:' in l_str:
+                                    m = re.search(r'(\d{2})/(\d{2})/(\d{4})', l_str)
+                                    if m: mes_ref = f"{m.group(2)}/{m.group(3)}"
                                     
-                                    if tipo_rel in ["ATEND", "COMB"] and col_alvo:
-                                        df_l.columns = df_l.columns.astype(str).str.strip().str.upper().str.replace('\n', ' ')
-                                        c_at = [c for c in df_l.columns if 'ATENDENTE' in c][0]
-                                        c_vl = [c for c in df_l.columns if any(x in c for x in ['NR. VENDAS', 'Nº VENDAS'])][0] if tipo_rel == "ATEND" else [c for c in df_l.columns if 'QUANTIDADE' in c][0]
+                                if 'ATENDENTE' in l_str and any(x in l_str for x in ['NR. VENDAS', 'Nº VENDAS']):
+                                    linha_cab, tipo_rel, col_alvo, item_nome = idx, "ATEND", "Atendimentos", "ATENDIMENTOS"
+                                elif 'ATENDENTE' in l_str and 'QUANTIDADE' in l_str:
+                                    linha_cab, tipo_rel = idx, "COMB"
+                                elif 'HORA' in l_str and 'LITRAGEM' in l_str:
+                                    linha_cab, tipo_rel, item_nome = idx, "METAS", "METAS CAIXA (SINTÉTICO)"
+
+                            if tipo_rel == "COMB":
+                                for idx, row in df_b.head(30).iterrows():
+                                    t = ' '.join([str(v) for v in row.values if pd.notna(v)]).upper()
+                                    if 'IDENTIFICAÇÃO DO ITEM' in t:
+                                        item_nome = t.split(':', 1)[1].split('-', 1)[-1].strip()
+                                        break
+                                if 'COMUM' in item_nome: col_alvo = 'GC'
+                                elif 'ADITIVADA' in item_nome: col_alvo = 'GA'
+                                elif 'S10' in item_nome: col_alvo = 'S10 - A'
+                                elif 'ETANOL' in item_nome: col_alvo = 'ETANOL'
+
+                            if linha_cab is not None:
+                                arq.seek(0)
+                                df_l = pd.read_excel(arq, header=linha_cab) if arq.name.endswith(('.xlsx', '.xls')) else pd.read_csv(arq, header=linha_cab, sep=None, engine='python', encoding='utf-8-sig')
+                                
+                                if tipo_rel in ["ATEND", "COMB"] and col_alvo:
+                                    df_l.columns = df_l.columns.astype(str).str.strip().str.upper().str.replace('\n', ' ')
+                                    c_at = [c for c in df_l.columns if 'ATENDENTE' in c][0]
+                                    c_vl = [c for c in df_l.columns if any(x in c for x in ['NR. VENDAS', 'Nº VENDAS'])][0] if tipo_rel == "ATEND" else [c for c in df_l.columns if 'QUANTIDADE' in c][0]
+                                    
+                                    df_f = df_l[[c_at, c_vl]].dropna().copy()
+                                    df_f.rename(columns={c_at: 'Nome', c_vl: 'Val'}, inplace=True)
+                                    df_f['Nome'] = df_f['Nome'].apply(lambda x: re.sub(r'^\s*\d+\s*-\s*', '', str(x)).replace('-', '').strip().upper())
+                                    
+                                    df_f['Val'] = df_f['Val'].apply(lambda v: float(str(v).replace('.', '').replace(',', '.')) if not isinstance(v, (int, float)) else float(v))
+                                    for _, r in df_f.iterrows():
+                                        nova_l = {'Arquivo': id_arq, 'Nome': r['Nome'], 'Mes': mes_ref, 'Atendimentos': 0, 'GC': 0, 'GA': 0, 'S10 - A': 0, 'ETANOL': 0}
+                                        nova_l[col_alvo] = r['Val']
+                                        st.session_state['vendas'] = pd.concat([st.session_state['vendas'], pd.DataFrame([nova_l])], ignore_index=True)
+                                    
+                                    st.session_state['processados_list'].append({'id': id_arq, 'Arquivo': arq.name, 'Mês': mes_ref, 'Tipo': item_nome})
+                                    salvar_dados()
+                                    st.success(f"✅ {item_nome} processado!")
+                                    
+                                elif tipo_rel == "METAS":
+                                    col_hora_name, col_pct_name = None, None
+                                    cols = list(df_l.columns)
+                                    for i, c in enumerate(cols):
+                                        if 'HORA' in str(c).upper().strip() and not col_hora_name: col_hora_name = c
+                                        if 'LITRAGEM' in str(c).upper().strip() and i + 1 < len(cols):
+                                            col_pct_name = cols[i+1] 
+                                            break
+                                                
+                                    if col_hora_name and col_pct_name:
+                                        df_l['H_INT'] = df_l[col_hora_name].apply(lambda v: int(re.search(r'\d+', str(v)).group()) if re.search(r'\d+', str(v)) else -1)
+                                        df_l['P_VAL'] = df_l[col_pct_name].apply(lambda v: float(str(v).replace('%','').replace(',','.')) if pd.notna(v) else 0.0)
                                         
-                                        df_f = df_l[[c_at, c_vl]].dropna().copy()
-                                        df_f.rename(columns={c_at: 'Nome', c_vl: 'Val'}, inplace=True)
-                                        df_f['Nome'] = df_f['Nome'].apply(lambda x: re.sub(r'^\s*\d+\s*-\s*', '', str(x)).replace('-', '').strip().upper())
+                                        if df_l['P_VAL'].sum() <= 2.0: df_l['P_VAL'] = df_l['P_VAL'] * 100.0
+                                            
+                                        soma_manha = df_l[(df_l['H_INT'] >= 4) & (df_l['H_INT'] <= 16)]['P_VAL'].sum()
+                                        soma_noite = df_l[(df_l['H_INT'] >= 17) & (df_l['H_INT'] <= 23)]['P_VAL'].sum()
                                         
-                                        df_f['Val'] = df_f['Val'].apply(lambda v: float(str(v).replace('.', '').replace(',', '.')) if not isinstance(v, (int, float)) else float(v))
-                                        for _, r in df_f.iterrows():
-                                            nova_l = {'Arquivo': id_arq, 'Nome': r['Nome'], 'Mes': mes_ref, 'Atendimentos': 0, 'GC': 0, 'GA': 0, 'S10 - A': 0, 'ETANOL': 0}
-                                            nova_l[col_alvo] = r['Val']
-                                            st.session_state['vendas'] = pd.concat([st.session_state['vendas'], pd.DataFrame([nova_l])], ignore_index=True)
-                                        
+                                        st.session_state['config']['Meta_Dia'] = soma_manha / 2.0
+                                        st.session_state['config']['Meta_Noite'] = soma_noite / 2.0
                                         st.session_state['processados_list'].append({'id': id_arq, 'Arquivo': arq.name, 'Mês': mes_ref, 'Tipo': item_nome})
                                         salvar_dados()
-                                        st.success(f"✅ {item_nome} processado!")
-                                        
-                                    elif tipo_rel == "METAS":
-                                        col_hora_name, col_pct_name = None, None
-                                        cols = list(df_l.columns)
-                                        for i, c in enumerate(cols):
-                                            if 'HORA' in str(c).upper().strip() and not col_hora_name: col_hora_name = c
-                                            if 'LITRAGEM' in str(c).upper().strip() and i + 1 < len(cols):
-                                                col_pct_name = cols[i+1] 
-                                                break
-                                                    
-                                        if col_hora_name and col_pct_name:
-                                            df_l['H_INT'] = df_l[col_hora_name].apply(lambda v: int(re.search(r'\d+', str(v)).group()) if re.search(r'\d+', str(v)) else -1)
-                                            df_l['P_VAL'] = df_l[col_pct_name].apply(lambda v: float(str(v).replace('%','').replace(',','.')) if pd.notna(v) else 0.0)
-                                            
-                                            if df_l['P_VAL'].sum() <= 2.0: df_l['P_VAL'] = df_l['P_VAL'] * 100.0
-                                                
-                                            soma_manha = df_l[(df_l['H_INT'] >= 4) & (df_l['H_INT'] <= 16)]['P_VAL'].sum()
-                                            soma_noite = df_l[(df_l['H_INT'] >= 17) & (df_l['H_INT'] <= 23)]['P_VAL'].sum()
-                                            
-                                            st.session_state['config']['Meta_Dia'] = soma_manha / 2.0
-                                            st.session_state['config']['Meta_Noite'] = soma_noite / 2.0
-                                            st.session_state['processados_list'].append({'id': id_arq, 'Arquivo': arq.name, 'Mês': mes_ref, 'Tipo': item_nome})
-                                            salvar_dados()
-                                            st.success(f"✅ {item_nome} importado! Metas atualizadas.")
-                            except Exception as e: st.error(f"Erro em {arq.name}: {e}")
+                                        st.success(f"✅ {item_nome} importado! Metas atualizadas.")
+                        except Exception as e: st.error(f"Erro em {arq.name}: {e}")
 
-        with col_h:
-            with st.container(border=True):
-                st.subheader("📜 Histórico de Vendas/Metas")
-                if st.session_state['processados_list']:
-                    for item in st.session_state['processados_list']:
-                        c1, c2, c3, c4 = st.columns([4, 2, 3, 1])
-                        c1.caption(item['Arquivo']); c2.caption(item['Mês']); c3.caption(item['Tipo'])
-                        if c4.button("❌", key=f"del_{item['id']}", help="Remover"):
-                            st.session_state['processados_list'] = [x for x in st.session_state['processados_list'] if x['id'] != item['id']]
-                            st.session_state['vendas'] = st.session_state['vendas'][st.session_state['vendas']['Arquivo'] != item['id']]
-                            salvar_dados()
-                            st.rerun()
-
-                    st.markdown("---")
-                    if st.button("🧹 Limpar TODAS as Importações", use_container_width=True):
-                        st.session_state['processados_list'] = []
-                        st.session_state['vendas'] = pd.DataFrame(columns=['Arquivo', 'Nome', 'Mes', 'Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL'])
-                        salvar_dados()
-                        st.rerun()
-                else:
-                    st.info("Nenhum arquivo no histórico.")
-
-    with aba_escala:
-        st.info("O sistema lê o seu **Relatório Visual 12x36**, detecta a **Empresa e o Mês**, e auto-cadastra Empresa, Nomes e Turnos!")
-        
+    with col_h:
         with st.container(border=True):
-            col1, col2 = st.columns(2)
-            mes_ref_escala = col1.text_input("Mês da Escala", value="🔍 Auto-Detectar (Ou digite MM/YYYY)")
-            
-            opcoes_posto = ["🔍 Detectar Automaticamente (Topo da Planilha)"]
-            if not st.session_state['empresas'].empty:
-                opcoes_posto.extend(list(st.session_state['empresas']['Posto']))
-            posto_lote_escala = col2.selectbox("Vincular a qual Posto?", opcoes_posto)
-            
-            arq_escala = st.file_uploader("Upload da Planilha de Escala", type=["xlsx", "xls", "csv"], key="up_escala")
-            
-            if arq_escala and st.button("🚀 Processar e Auto-Cadastrar", type="primary"):
-                try:
-                    is_excel = arq_escala.name.endswith(('.xlsx', '.xls'))
-                    sheet_names = pd.ExcelFile(arq_escala).sheet_names if is_excel else ['CSV_Unico']
-                    
-                    novas_escalas = []
-                    palavras_ignoradas = ["", "NAN", "SEGUNDA A SEXTA", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "SABADO", "DOMINGO", "DOMINGO / FERIADO VERMELHO", "FERIADO", "NOMES", "IMPAR - PAR", "IMPAR", "PAR", "ESCALA DA COPA", "ESCALA", "HORÁRIO", "HORARIO"]
-                    
-                    for sheet in sheet_names:
-                        df_e = pd.read_excel(arq_escala, sheet_name=sheet, header=None) if is_excel else pd.read_csv(arq_escala, header=None, sep=None, engine='python', encoding='utf-8-sig')
-                        
-                        posto_atual = None
-                        mes_final = mes_ref_escala
-                        
-                        if "Auto-Detectar" in mes_ref_escala:
-                            m_file = re.search(r'(0[1-9]|1[0-2])[-_](20[2-3][0-9])', arq_escala.name)
-                            if m_file:
-                                mes_final = f"{m_file.group(1)}/{m_file.group(2)}"
-                            else:
-                                encontrou_mes = False
-                                meses_map = {'JANEIRO':'01', 'FEVEREIRO':'02', 'MARÇO':'03', 'MARCO':'03', 'ABRIL':'04', 'MAIO':'05', 'JUNHO':'06', 'JULHO':'07', 'AGOSTO':'08', 'SETEMBRO':'09', 'OUTUBRO':'10', 'NOVEMBRO':'11', 'DEZEMBRO':'12'}
-                                for _, row in df_e.head(15).iterrows():
-                                    linha_texto = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
-                                    m_txt = re.search(r'(0[1-9]|1[0-2])/(20[2-3][0-9])', linha_texto)
-                                    if m_txt:
-                                        mes_final = f"{m_txt.group(1)}/{m_txt.group(2)}"
-                                        encontrou_mes = True
-                                        break
-                                    for m_nome, m_num in meses_map.items():
-                                        if m_nome in linha_texto:
-                                            ano_m = re.search(r'20[2-3][0-9]', linha_texto)
-                                            ano_str = ano_m.group(0) if ano_m else datetime.today().strftime("%Y")
-                                            mes_final = f"{m_num}/{ano_str}"
-                                            encontrou_mes = True
-                                            break
-                                    if encontrou_mes: break
-                                if not encontrou_mes:
-                                    mes_final = datetime.today().strftime("%m/%Y")
-                        
-                        for idx, row in df_e.iterrows():
-                            if len(row) > 1:
-                                col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
-                                col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
-                                
-                                if posto_atual is None and posto_lote_escala == "🔍 Detectar Automaticamente (Topo da Planilha)":
-                                    for val in [col0, col1]:
-                                        val_up = val.upper()
-                                        if val_up and val_up not in palavras_ignoradas and not re.search(r'\d{1,2}H', val_up) and not val_up.isnumeric() and not "/" in val_up:
-                                            posto_atual = val_up
-                                            break
-                                
-                                posto_final = posto_atual if posto_atual else (posto_lote_escala if posto_lote_escala != "🔍 Detectar Automaticamente (Topo da Planilha)" else "POSTO NÃO IDENTIFICADO")
-                                
-                                col0_up = col0.upper()
-                                col1_up = col1.upper()
-                                
-                                if "H" in col0_up and col1_up != "":
-                                    cargo = "Frentista"
-                                    if "CX DIA" in col0_up: cargo = "CX MANHÃ"
-                                    elif "CX NOITE" in col0_up: cargo = "CX NOITE"
-                                    
-                                    turno_limpo = col0_up.replace("- CX DIA", "").replace("CX DIA", "").replace("- CX NOITE", "").replace("CX NOITE", "").strip()
-                                    
-                                    if "-" in col1_up and "IMPAR" not in col1_up:
-                                        nomes = col1_up.split("-")
-                                        if len(nomes) >= 2:
-                                            nome_impar = nomes[0].strip()
-                                            nome_par = nomes[1].strip()
-                                            
-                                            if nome_impar: novas_escalas.append({'Mes': mes_final, 'Nome': nome_impar, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
-                                            if nome_par: novas_escalas.append({'Mes': mes_final, 'Nome': nome_par, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
-                                    
-                                    elif "IMPAR" not in col1_up and "-" not in col1_up:
-                                        nome_unico = col1_up.strip()
-                                        if nome_unico not in ["NAN", ""]:
-                                            novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
-                                    
-                    if novas_escalas:
-                        df_nova_escala = pd.DataFrame(novas_escalas)
-                        
-                        if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
-                        if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
-                            st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
-                        st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
-                        
-                        qtd_postos_novos = 0
-                        qtd_turnos_novos = 0
-                        qtd_colabs_novos = 0
-                        
-                        postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
-                        postos_na_planilha = df_nova_escala['Posto'].unique()
-                        
-                        novas_empresas_df = []
-                        for p in postos_na_planilha:
-                            if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
-                                novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'})
-                                qtd_postos_novos += 1
-                                
-                        if novas_empresas_df:
-                            st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
-
-                        turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
-                        turnos_na_planilha = df_nova_escala['Turno'].unique()
-                        
-                        novos_turnos_df = []
-                        for t in turnos_na_planilha:
-                            if t not in turnos_existentes:
-                                novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'})
-                                qtd_turnos_novos += 1
-                                
-                        if novos_turnos_df:
-                            st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
-                            
-                        nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
-                        nomes_processados_agora = set() 
-                        novos_colabs_df = []
-                        
-                        for _, row in df_nova_escala.iterrows():
-                            nome_val = row['Nome']
-                            if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
-                                novos_colabs_df.append({
-                                    'Posto': row['Posto'],
-                                    'Turno': row['Turno'],
-                                    'Cargo': row['Cargo'],
-                                    'Nome': nome_val,
-                                    'Status': 'Ativo'
-                                })
-                                nomes_processados_agora.add(nome_val)
-                                qtd_colabs_novos += 1
-                                
-                        if novos_colabs_df:
-                            st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
-
+            st.subheader("📜 Histórico de Vendas/Metas")
+            if st.session_state['processados_list']:
+                for item in st.session_state['processados_list']:
+                    c1, c2, c3, c4 = st.columns([4, 2, 3, 1])
+                    c1.caption(item['Arquivo']); c2.caption(item['Mês']); c3.caption(item['Tipo'])
+                    if c4.button("❌", key=f"del_{item['id']}", help="Remover"):
+                        st.session_state['processados_list'] = [x for x in st.session_state['processados_list'] if x['id'] != item['id']]
+                        st.session_state['vendas'] = st.session_state['vendas'][st.session_state['vendas']['Arquivo'] != item['id']]
                         salvar_dados()
-                        
-                        mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
-                        if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
-                        if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
-                        if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
-                        
-                        st.success(mensagem_final)
-                        time.sleep(3) 
                         st.rerun()
-                    else:
-                        st.warning("⚠️ Não encontrei o padrão de horários e nomes na planilha. Revise o arquivo.")
-                except Exception as e:
-                    st.error(f"Erro ao processar o arquivo: {e}")
 
-        if not st.session_state.get('escalas', pd.DataFrame()).empty:
-            st.markdown("---")
-            st.subheader("📋 Banco de Escalas Mensais")
-            
-            c_del1, c_del2 = st.columns([2, 1])
-            meses_salvos = sorted(st.session_state['escalas']['Mes'].unique(), reverse=True)
-            mes_excluir = c_del1.selectbox("Selecione o Mês para Excluir a Escala", meses_salvos)
-            
-            if c_del2.button("🗑️ Excluir Escala do Mês", type="primary", use_container_width=True):
-                st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_excluir]
-                salvar_dados()
-                st.success(f"🗑️ A escala de {mes_excluir} foi removida permanentemente!")
-                time.sleep(1.5)
-                st.rerun()
-                
-            st.dataframe(st.session_state['escalas'].iloc[::-1], use_container_width=True, hide_index=True)
+                st.markdown("---")
+                if st.button("🧹 Limpar TODAS as Importações", use_container_width=True):
+                    st.session_state['processados_list'] = []
+                    st.session_state['vendas'] = pd.DataFrame(columns=['Arquivo', 'Nome', 'Mes', 'Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL'])
+                    salvar_dados()
+                    st.rerun()
+            else:
+                st.info("Nenhum arquivo no histórico.")
 
 # --- TELA: GESTÃO DE ACESSOS ---
 elif menu == "🔐 Gestão de Acessos":
