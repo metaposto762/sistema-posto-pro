@@ -253,23 +253,33 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
     if not df.empty:
         df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
         
-        # 🧠 CÉREBRO MATEMÁTICO: IGNORA O ALMOÇO (Primeira Entrada até a Última Saída)
+        # 🧠 CÉREBRO MATEMÁTICO AVANÇADO (Ignora almoço e Entende 1h15m como Tarde)
         def extrair_horas(t):
             matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
             if len(matches) >= 2:
-                # Pega sempre a primeira e a última ocorrência de hora na frase
+                # Pega SEMPRE a primeira entrada e a última saída
                 h1, m1 = matches[0]
                 h2, m2 = matches[-1]
                 t1 = int(h1)*60 + (int(m1) if m1 else 0)
                 t2 = int(h2)*60 + (int(m2) if m2 else 0)
-                if t2 <= t1: t2 += 24*60 # Caso vire a noite
-                return round((t2 - t1) / 60.0, 2)
+                
+                if t2 <= t1: 
+                    t2 += 24*60 # Virou a noite
+                    
+                total_horas = (t2 - t1) / 60.0
+                
+                # Heurística Humana: Se deu mais de 15h trabalhadas e a hora final era < 12 (Ex: 1h15m)
+                # Significa que a pessoa escreveu no formato AM/PM. Corrigimos subtraindo 12h.
+                if total_horas > 15.0 and int(h2) < 12:
+                    total_horas -= 12.0
+                    
+                return round(total_horas, 2)
             return 0.0
 
         if 'Turno' in df.columns:
             df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
             
-            # 🚀 VOLTAMOS COM A REGRA DE AGRUPAR PARA MENOS DE 12 HORAS!
+            # 🚀 RETORNO DA REGRA DE AGRUPAMENTO (Se for menor que 12h, agrupa!)
             df['Caixa_Visual'] = df.apply(lambda r: f"⏳ Turnos Agrupados ({r['Carga_Horaria']}h)" if r['Carga_Horaria'] < 12.0 else f"🕒 Turno: {r['Turno']}", axis=1)
             
             df['Qtd_Caixa'] = df.groupby(['Posto', 'Caixa_Visual'])['Nome'].transform('count')
@@ -403,7 +413,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 12.2 | Regra Restaurada")
+    st.caption("Versão 13.0 | Mente Brilhante")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -1009,11 +1019,11 @@ elif menu == "📈 Importar Planilhas":
                     st.info("Nenhum arquivo no histórico.")
 
     with aba_escala:
-        st.info("O sistema lê o seu **Relatório Visual 12x36**, detecta a **Empresa no topo**, e auto-cadastra Empresa, Nomes e Turnos!")
+        st.info("O sistema lê o seu **Relatório Visual 12x36**, detecta a **Empresa e o Mês**, e auto-cadastra Empresa, Nomes e Turnos!")
         
         with st.container(border=True):
             col1, col2 = st.columns(2)
-            mes_ref_escala = col1.text_input("Mês da Escala (Ex: 03/2026)", value=datetime.today().strftime("%m/%Y"))
+            mes_ref_escala = col1.text_input("Mês da Escala", value="🔍 Auto-Detectar (Ou digite MM/YYYY)")
             
             opcoes_posto = ["🔍 Detectar Automaticamente (Topo da Planilha)"]
             if not st.session_state['empresas'].empty:
@@ -1034,6 +1044,33 @@ elif menu == "📈 Importar Planilhas":
                         df_e = pd.read_excel(arq_escala, sheet_name=sheet, header=None) if is_excel else pd.read_csv(arq_escala, header=None, sep=None, engine='python', encoding='utf-8-sig')
                         
                         posto_atual = None
+                        mes_final = mes_ref_escala
+                        
+                        # 🧠 DETECTOR INTELIGENTE DE MÊS
+                        if "Auto-Detectar" in mes_ref_escala:
+                            m_file = re.search(r'(0[1-9]|1[0-2])[-_](20[2-3][0-9])', arq_escala.name)
+                            if m_file:
+                                mes_final = f"{m_file.group(1)}/{m_file.group(2)}"
+                            else:
+                                encontrou_mes = False
+                                meses_map = {'JANEIRO':'01', 'FEVEREIRO':'02', 'MARÇO':'03', 'MARCO':'03', 'ABRIL':'04', 'MAIO':'05', 'JUNHO':'06', 'JULHO':'07', 'AGOSTO':'08', 'SETEMBRO':'09', 'OUTUBRO':'10', 'NOVEMBRO':'11', 'DEZEMBRO':'12'}
+                                for _, row in df_e.head(15).iterrows():
+                                    linha_texto = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+                                    m_txt = re.search(r'(0[1-9]|1[0-2])/(20[2-3][0-9])', linha_texto)
+                                    if m_txt:
+                                        mes_final = f"{m_txt.group(1)}/{m_txt.group(2)}"
+                                        encontrou_mes = True
+                                        break
+                                    for m_nome, m_num in meses_map.items():
+                                        if m_nome in linha_texto:
+                                            ano_m = re.search(r'20[2-3][0-9]', linha_texto)
+                                            ano_str = ano_m.group(0) if ano_m else datetime.today().strftime("%Y")
+                                            mes_final = f"{m_num}/{ano_str}"
+                                            encontrou_mes = True
+                                            break
+                                    if encontrou_mes: break
+                                if not encontrou_mes:
+                                    mes_final = datetime.today().strftime("%m/%Y")
                         
                         for idx, row in df_e.iterrows():
                             if len(row) > 1:
@@ -1043,7 +1080,7 @@ elif menu == "📈 Importar Planilhas":
                                 if posto_atual is None and posto_lote_escala == "🔍 Detectar Automaticamente (Topo da Planilha)":
                                     for val in [col0, col1]:
                                         val_up = val.upper()
-                                        if val_up and val_up not in palavras_ignoradas and not re.search(r'\d{1,2}H', val_up) and not val_up.isnumeric():
+                                        if val_up and val_up not in palavras_ignoradas and not re.search(r'\d{1,2}H', val_up) and not val_up.isnumeric() and not "/" in val_up:
                                             posto_atual = val_up
                                             break
                                 
@@ -1065,20 +1102,20 @@ elif menu == "📈 Importar Planilhas":
                                             nome_impar = nomes[0].strip()
                                             nome_par = nomes[1].strip()
                                             
-                                            if nome_impar: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_impar, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
-                                            if nome_par: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_par, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
+                                            if nome_impar: novas_escalas.append({'Mes': mes_final, 'Nome': nome_impar, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
+                                            if nome_par: novas_escalas.append({'Mes': mes_final, 'Nome': nome_par, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
                                     
                                     elif "IMPAR" not in col1_up and "-" not in col1_up:
                                         nome_unico = col1_up.strip()
                                         if nome_unico not in ["NAN", ""]:
-                                            novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diarista/Mensalista'})
+                                            novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
                                     
                     if novas_escalas:
                         df_nova_escala = pd.DataFrame(novas_escalas)
                         
                         if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
                         if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
-                            st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_ref_escala]
+                            st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
                         st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
                         
                         qtd_postos_novos = 0
@@ -1131,7 +1168,7 @@ elif menu == "📈 Importar Planilhas":
 
                         salvar_dados()
                         
-                        mensagem_final = f"✅ Escala de {mes_ref_escala} importada! ({len(novas_escalas)} registros)."
+                        mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
                         if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
                         if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
                         if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
@@ -1144,6 +1181,7 @@ elif menu == "📈 Importar Planilhas":
                 except Exception as e:
                     st.error(f"Erro ao processar o arquivo: {e}")
 
+        # 🗑️ EXCLUIR PLANILHA DE ESCALA IMPORTADA
         if not st.session_state.get('escalas', pd.DataFrame()).empty:
             st.markdown("---")
             st.subheader("📋 Banco de Escalas Mensais")
