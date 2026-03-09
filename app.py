@@ -26,7 +26,7 @@ except ImportError:
 # ==========================================
 # 🛑 COLE O ID DA SUA PLANILHA AQUI ABAIXO:
 # ==========================================
-PLANILHA_ID = "1TKD0UaTm-wxALJ426T19RjXldPHA-DkJ40BbdN9wS80"
+PLANILHA_ID = "COLE_AQUI_O_SEU_ID_GIGANTE"
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="AutoPosto Pro", page_icon="⛽", layout="wide", initial_sidebar_state="expanded")
@@ -55,40 +55,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# 🔐 SISTEMA DE LOGIN E SEGURANÇA
-# ==========================================
-if 'autenticado' not in st.session_state:
-    st.session_state['autenticado'] = False
-
-if not st.session_state['autenticado']:
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-    with col2:
-        with st.container(border=True):
-            st.markdown("<h2 style='text-align: center;'>⛽ AutoPosto Pro</h2>", unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; color: gray;'>Acesso Restrito</p>", unsafe_allow_html=True)
-            st.markdown("---")
-            
-            with st.form("form_login"):
-                usuario_digitado = st.text_input("Usuário")
-                senha_digitada = st.text_input("Senha", type="password")
-                btn_entrar = st.form_submit_button("Entrar no Sistema", use_container_width=True, type="primary")
-                
-                if btn_entrar:
-                    try:
-                        # Lê os dados do cofre do Streamlit
-                        user_correto = st.secrets["credenciais_acesso"]["usuario"]
-                        senha_correta = st.secrets["credenciais_acesso"]["senha"]
-                        
-                        if usuario_digitado == user_correto and senha_digitada == senha_correta:
-                            st.session_state['autenticado'] = True
-                            st.rerun()
-                        else:
-                            st.error("❌ Usuário ou senha incorretos!")
-                    except KeyError:
-                        st.warning("⚠️ As credenciais ainda não foram configuradas no Streamlit Secrets.")
-    st.stop() # 🛑 Trava o carregamento do resto da página se não estiver logado
 
 # ==========================================
 # MOTOR DE BANCO DE DADOS (GOOGLE SHEETS)
@@ -124,6 +90,11 @@ def carregar_dados():
         st.session_state['empresas'] = load_ws('empresas', ['Posto', 'Status'])
         st.session_state['turnos'] = load_ws('turnos', ['Turno', 'Status'])
         st.session_state['equipe'] = load_ws('equipe', ['Posto', 'Turno', 'Cargo', 'Nome', 'Status'])
+        
+        df_usr = load_ws('usuarios', ['Usuario', 'Senha', 'Perfil', 'Status'])
+        df_usr['Usuario'] = df_usr['Usuario'].astype(str).str.strip()
+        df_usr['Senha'] = df_usr['Senha'].astype(str).str.strip()
+        st.session_state['usuarios'] = df_usr
         
         df_vendas = load_ws('vendas', ['Arquivo', 'Nome', 'Mes', 'Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL'])
         for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
@@ -166,6 +137,7 @@ def salvar_dados():
         save_ws('vendas', st.session_state['vendas'])
         save_ws('config', st.session_state['config'])
         save_ws('aniversarios', st.session_state['aniversarios'])
+        save_ws('usuarios', st.session_state['usuarios'])
         
         log_df = pd.DataFrame(st.session_state['processados_list']) if st.session_state['processados_list'] else pd.DataFrame(columns=['id', 'Arquivo', 'Mês', 'Tipo'])
         save_ws('log', log_df)
@@ -173,6 +145,59 @@ def salvar_dados():
         st.error(f"🛑 Erro ao salvar os dados na nuvem: {e}")
         st.stop()
 
+# ==========================================
+# 🔐 SISTEMA DE LOGIN E SEGURANÇA
+# ==========================================
+if 'autenticado' not in st.session_state:
+    st.session_state['autenticado'] = False
+    st.session_state['usuario_logado'] = ""
+    st.session_state['perfil_logado'] = ""
+
+if not st.session_state['autenticado']:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        with st.container(border=True):
+            st.markdown("<h2 style='text-align: center;'>⛽ AutoPosto Pro</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: gray;'>Acesso Restrito</p>", unsafe_allow_html=True)
+            st.markdown("---")
+            
+            with st.form("form_login"):
+                usuario_digitado = st.text_input("Usuário").strip()
+                senha_digitada = st.text_input("Senha", type="password").strip()
+                btn_entrar = st.form_submit_button("Entrar no Sistema", use_container_width=True, type="primary")
+                
+                if btn_entrar:
+                    with st.spinner("Autenticando..."):
+                        if 'empresas' not in st.session_state: carregar_dados()
+                        
+                        try:
+                            master_user = str(st.secrets["credenciais_acesso"]["usuario"]).strip()
+                            master_pass = str(st.secrets["credenciais_acesso"]["senha"]).strip()
+                        except KeyError:
+                            master_user, master_pass = None, None
+                        
+                        df_usr = st.session_state.get('usuarios', pd.DataFrame())
+                        user_valido = False
+                        
+                        if master_user and usuario_digitado == master_user and senha_digitada == master_pass:
+                            st.session_state['autenticado'] = True
+                            st.session_state['usuario_logado'] = "Admin Master"
+                            st.session_state['perfil_logado'] = "Admin"
+                            user_valido = True
+                        elif not df_usr.empty:
+                            busca = df_usr[(df_usr['Usuario'] == usuario_digitado) & (df_usr['Senha'] == senha_digitada) & (df_usr['Status'] == 'Ativo')]
+                            if not busca.empty:
+                                st.session_state['autenticado'] = True
+                                st.session_state['usuario_logado'] = busca.iloc[0]['Usuario']
+                                st.session_state['perfil_logado'] = busca.iloc[0]['Perfil']
+                                user_valido = True
+                        
+                        if user_valido: st.rerun()
+                        else: st.error("❌ Usuário ou senha incorretos ou inativos!")
+    st.stop() 
+
+# Carrega os dados para quem já logou
 if 'empresas' not in st.session_state:
     with st.spinner("Conectando ao Servidor Google..."):
         carregar_dados()
@@ -258,20 +283,26 @@ def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
 # ==========================================
 with st.sidebar:
     st.title("⛽ AutoPosto Pro")
-    st.markdown("---")
-    menu = st.radio(
-        "Navegação do Sistema",
-        ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
-    )
+    st.markdown(f"👤 Usuário: **{st.session_state['usuario_logado']}**")
     st.markdown("---")
     
-    # Botão de Logout
+    opcoes_menu = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
+    
+    # O menu de Acessos só aparece se o perfil for Admin
+    if st.session_state['perfil_logado'] == 'Admin':
+        opcoes_menu.append("🔐 Gestão de Acessos")
+        
+    menu = st.radio("Navegação do Sistema", opcoes_menu)
+    st.markdown("---")
+    
     if st.button("🚪 Sair do Sistema", use_container_width=True):
         st.session_state['autenticado'] = False
+        st.session_state['usuario_logado'] = ""
+        st.session_state['perfil_logado'] = ""
         st.rerun()
         
     st.markdown("---")
-    st.caption("Versão 6.0 | Sistema Blindado")
+    st.caption("Versão 6.1 | Multi-Usuários")
 
 # ==========================================
 # FUNÇÃO DE CÁLCULO GERAL
@@ -330,9 +361,70 @@ def f_moeda(val): return "R$ 0,00" if pd.isna(val) else "R$ {:,.2f}".format(val)
 def cor_style(val): return 'color: #10b981; font-weight: bold;' if val >= 0.90 else 'color: #ef4444; font-weight: bold;'
 
 # ==========================================
+# GESTÃO DE ACESSOS (SÓ PARA ADMIN)
+# ==========================================
+if menu == "🔐 Gestão de Acessos":
+    st.header("🔐 Gestão de Usuários")
+    st.markdown("Crie usuários para a sua equipe acessar o sistema sem precisar compartilhar a sua senha principal.")
+    
+    aba_novo_u, aba_editar_u = st.tabs(["🆕 Novo Usuário", "📋 Editar / Inativar"])
+    
+    with aba_novo_u:
+        with st.container(border=True):
+            with st.form("form_usuario", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    novo_login = st.text_input("Login (Ex: gerente.joao)*").strip()
+                    novo_perfil = st.selectbox("Perfil de Acesso", ["Admin", "Operador"], help="Admin tem acesso a esta tela. Operador acessa todo o resto, mas não cria usuários.")
+                with col2:
+                    nova_senha = st.text_input("Senha*", type="password").strip()
+                    
+                if st.form_submit_button("Criar Usuário", type="primary"):
+                    if novo_login and nova_senha:
+                        if novo_login in st.session_state['usuarios']['Usuario'].values:
+                            st.error("Esse login já existe!")
+                        else:
+                            st.session_state['usuarios'] = pd.concat([st.session_state['usuarios'], pd.DataFrame({'Usuario': [novo_login], 'Senha': [nova_senha], 'Perfil': [novo_perfil], 'Status': ['Ativo']})], ignore_index=True)
+                            salvar_dados()
+                            st.success(f"✅ Usuário {novo_login} criado com sucesso!")
+                            st.rerun()
+                    else:
+                        st.warning("Preencha o Login e a Senha.")
+
+    with aba_editar_u:
+        if st.session_state['usuarios'].empty:
+            st.info("Nenhum usuário cadastrado no banco de dados ainda.")
+        else:
+            with st.container(border=True):
+                user_editar = st.selectbox("Selecione o Usuário", st.session_state['usuarios']['Usuario'])
+                dados_u = st.session_state['usuarios'][st.session_state['usuarios']['Usuario'] == user_editar].iloc[0]
+                
+                with st.form("form_editar_usuario"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        senha_u = st.text_input("Nova Senha", value=dados_u['Senha'])
+                    with col2:
+                        perfis = ["Admin", "Operador"]
+                        perfil_u = st.selectbox("Perfil", perfis, index=perfis.index(dados_u['Perfil']) if dados_u['Perfil'] in perfis else 0)
+                    with col3:
+                        status_u = st.selectbox("Status", ["Ativo", "Inativo"], index=0 if dados_u['Status'] == 'Ativo' else 1)
+                        
+                    if st.form_submit_button("Atualizar Usuário"):
+                        idx = st.session_state['usuarios'].index[st.session_state['usuarios']['Usuario'] == user_editar][0]
+                        st.session_state['usuarios'].at[idx, 'Senha'] = senha_u.strip()
+                        st.session_state['usuarios'].at[idx, 'Perfil'] = perfil_u
+                        st.session_state['usuarios'].at[idx, 'Status'] = status_u
+                        salvar_dados()
+                        st.success("✅ Usuário atualizado!")
+                        st.rerun()
+            
+            st.subheader("Usuários Cadastrados")
+            st.dataframe(st.session_state['usuarios'][['Usuario', 'Perfil', 'Status']], use_container_width=True, hide_index=True)
+
+# ==========================================
 # TELAS DE CADASTRO
 # ==========================================
-if menu == "🏢 Cadastro Empresa":
+elif menu == "🏢 Cadastro Empresa":
     st.header("🏢 Gestão de Empresas")
     aba_nova, aba_editar, aba_excluir = st.tabs(["🆕 Nova Empresa", "✏️ Editar Existente", "⛔ Inativar"])
     
