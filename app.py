@@ -55,6 +55,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# 🔐 SISTEMA DE LOGIN E SEGURANÇA
+# ==========================================
+if 'autenticado' not in st.session_state:
+    st.session_state['autenticado'] = False
+
+if not st.session_state['autenticado']:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        with st.container(border=True):
+            st.markdown("<h2 style='text-align: center;'>⛽ AutoPosto Pro</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: gray;'>Acesso Restrito</p>", unsafe_allow_html=True)
+            st.markdown("---")
+            
+            with st.form("form_login"):
+                usuario_digitado = st.text_input("Usuário")
+                senha_digitada = st.text_input("Senha", type="password")
+                btn_entrar = st.form_submit_button("Entrar no Sistema", use_container_width=True, type="primary")
+                
+                if btn_entrar:
+                    try:
+                        # Lê os dados do cofre do Streamlit
+                        user_correto = st.secrets["credenciais_acesso"]["usuario"]
+                        senha_correta = st.secrets["credenciais_acesso"]["senha"]
+                        
+                        if usuario_digitado == user_correto and senha_digitada == senha_correta:
+                            st.session_state['autenticado'] = True
+                            st.rerun()
+                        else:
+                            st.error("❌ Usuário ou senha incorretos!")
+                    except KeyError:
+                        st.warning("⚠️ As credenciais ainda não foram configuradas no Streamlit Secrets.")
+    st.stop() # 🛑 Trava o carregamento do resto da página se não estiver logado
 
 # ==========================================
 # MOTOR DE BANCO DE DADOS (GOOGLE SHEETS)
@@ -107,7 +141,7 @@ def carregar_dados():
         st.session_state['aniversarios'] = load_ws('aniversarios', ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
         
     except Exception as e:
-        st.error(f"⚠️ Erro ao conectar com a Planilha do Google: {e}. Verifique o ID e se compartilhou com o e-mail do robô.")
+        st.error(f"⚠️ Erro ao conectar com a Planilha do Google: {e}")
         st.stop()
 
 def salvar_dados():
@@ -117,22 +151,14 @@ def salvar_dados():
         doc = client.open_by_key(PLANILHA_ID)
         
         def save_ws(name, df):
-            # Cria a aba automaticamente se ela não existir
-            try:
-                ws = doc.worksheet(name)
-            except gspread.exceptions.WorksheetNotFound:
-                ws = doc.add_worksheet(title=name, rows="1000", cols="20")
+            try: ws = doc.worksheet(name)
+            except gspread.exceptions.WorksheetNotFound: ws = doc.add_worksheet(title=name, rows="1000", cols="20")
             
             ws.clear()
-            # CONVERSÃO ABSOLUTA: Transforma TUDO em texto para o Google não rejeitar formatos estranhos
             df_clean = df.fillna("").astype(str)
             dados = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
-            
-            # Envia para a nuvem
-            try:
-                ws.update(values=dados, range_name='A1')
-            except TypeError:
-                ws.update('A1', dados)
+            try: ws.update(values=dados, range_name='A1')
+            except TypeError: ws.update('A1', dados)
             
         save_ws('empresas', st.session_state['empresas'])
         save_ws('turnos', st.session_state['turnos'])
@@ -144,7 +170,6 @@ def salvar_dados():
         log_df = pd.DataFrame(st.session_state['processados_list']) if st.session_state['processados_list'] else pd.DataFrame(columns=['id', 'Arquivo', 'Mês', 'Tipo'])
         save_ws('log', log_df)
     except Exception as e:
-        # Trava a tela e exibe o erro se o Google rejeitar a conexão
         st.error(f"🛑 Erro ao salvar os dados na nuvem: {e}")
         st.stop()
 
@@ -239,7 +264,14 @@ with st.sidebar:
         ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
     )
     st.markdown("---")
-    st.caption("Versão 5.1 | CLOUD GOOGLE SHEETS")
+    
+    # Botão de Logout
+    if st.button("🚪 Sair do Sistema", use_container_width=True):
+        st.session_state['autenticado'] = False
+        st.rerun()
+        
+    st.markdown("---")
+    st.caption("Versão 6.0 | Sistema Blindado")
 
 # ==========================================
 # FUNÇÃO DE CÁLCULO GERAL
@@ -851,9 +883,7 @@ elif menu == "🎂 Aniversariantes":
                     if lista_dfs:
                         df_final = pd.concat(lista_dfs)
                         st.session_state['aniversarios'] = pd.concat([st.session_state['aniversarios'], df_final]).drop_duplicates(subset=['Nome'], keep='last')
-                        
-                        salvar_dados() # Agora o salvar_dados está blindado contra quedas
-                        
+                        salvar_dados()
                         st.success("✅ Registros processados e salvos com sucesso!")
                         st.rerun()
                     else: st.error("Tabela não encontrada.")
