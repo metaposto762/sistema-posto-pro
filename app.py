@@ -186,6 +186,10 @@ if not st.session_state['autenticado']:
                     else:
                         df_u = st.session_state.get('usuarios', pd.DataFrame())
                         if not df_u.empty:
+                            # 🛠️ CORREÇÃO: Força a planilha a ler senhas e usuários como TEXTO
+                            df_u['Usuario'] = df_u['Usuario'].astype(str).str.strip()
+                            df_u['Senha'] = df_u['Senha'].astype(str).str.strip()
+                            
                             busca = df_u[(df_u['Usuario'] == u) & (df_u['Senha'] == p) & (df_u['Status'] == 'Ativo')]
                             if not busca.empty:
                                 st.session_state['usuario_logado'] = busca.iloc[0]['Usuario']
