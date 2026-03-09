@@ -85,7 +85,6 @@ def get_device():
         ua = st.context.headers.get("User-Agent", "").lower()
     except:
         ua = ""
-    
     if not ua: return "🖥️ Desconhecido"
     if "android" in ua: return "📱 Celular (Android)"
     elif "iphone" in ua or "ipad" in ua: return "📱 Celular (iOS)"
@@ -95,7 +94,7 @@ def get_device():
     else: return "🖥️ Sistema Web"
 
 # ==========================================
-# 📊 MOTOR DO GOOGLE SHEETS
+# 📊 MOTOR DO GOOGLE SHEETS (OTIMIZADO API)
 # ==========================================
 @st.cache_resource
 def get_gsheets_client():
@@ -108,11 +107,17 @@ def carregar_dados():
         client = get_gsheets_client()
         doc = client.open_by_key(PLANILHA_ID)
         
+        # OTIMIZAÇÃO: Puxa nomes de todas as abas 1 vez só
+        todas_abas = {ws.title: ws for ws in doc.worksheets()}
+        
         def load_ws(name, cols):
             try:
-                ws = doc.worksheet(name)
-                data = ws.get_all_records()
-                return pd.DataFrame(data) if data else pd.DataFrame(columns=cols)
+                if name in todas_abas:
+                    data = todas_abas[name].get_all_records()
+                    time.sleep(0.3) # Evita rajada no servidor
+                    return pd.DataFrame(data) if data else pd.DataFrame(columns=cols)
+                else:
+                    return pd.DataFrame(columns=cols)
             except: return pd.DataFrame(columns=cols)
 
         st.session_state['empresas'] = load_ws('empresas', ['Posto', 'Status'])
@@ -134,32 +139,48 @@ def carregar_dados():
                 st.session_state['vendas'][col] = pd.to_numeric(st.session_state['vendas'][col], errors='coerce').fillna(0)
             
     except Exception as e:
-        st.error(f"Erro de Conexão Google: {e}")
+        st.error(f"Erro de Conexão Google: Aguarde um minuto, o limite de segurança da API foi atingido. ({e})")
 
-def salvar_dados():
+# 🚀 NOVO SALVAMENTO INTELIGENTE (Só salva a planilha que foi modificada)
+def salvar_dados(abas_para_salvar=None):
     try:
         client = get_gsheets_client()
         doc = client.open_by_key(PLANILHA_ID)
+        todas_abas = {ws.title: ws for ws in doc.worksheets()}
+
         def save_ws(name, df):
-            try: ws = doc.worksheet(name)
-            except: ws = doc.add_worksheet(title=name, rows="1000", cols="20")
-            ws.clear()
-            df_clean = df.fillna("").astype(str)
-            dados = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
-            ws.update(values=dados, range_name='A1')
+            try: 
+                if name in todas_abas:
+                    ws = todas_abas[name]
+                else:
+                    ws = doc.add_worksheet(title=name, rows="1000", cols="20")
+                    todas_abas[name] = ws
+                    time.sleep(1) # Espera Google criar a aba
+                
+                ws.clear()
+                df_clean = df.fillna("").astype(str)
+                dados = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
+                ws.update(values=dados, range_name='A1')
+                time.sleep(0.5) # Respiro pra API
+            except Exception as e: 
+                print(f"Erro ao salvar aba {name}: {e}")
+
+        # Se não falar qual aba, salva tudo (fallback de segurança)
+        if abas_para_salvar is None:
+            abas_para_salvar = ['empresas', 'turnos', 'equipe', 'vendas', 'config', 'aniversarios', 'usuarios', 'log_acessos', 'escalas', 'log']
             
-        save_ws('empresas', st.session_state['empresas'])
-        save_ws('turnos', st.session_state['turnos'])
-        save_ws('equipe', st.session_state['equipe'])
-        save_ws('vendas', st.session_state['vendas'])
-        save_ws('config', st.session_state['config'])
-        save_ws('aniversarios', st.session_state['aniversarios'])
-        save_ws('usuarios', st.session_state['usuarios'])
-        save_ws('log_acessos', st.session_state['log_acessos'])
-        save_ws('escalas', st.session_state['escalas']) 
-        save_ws('log', pd.DataFrame(st.session_state['processados_list']))
+        if 'empresas' in abas_para_salvar: save_ws('empresas', st.session_state['empresas'])
+        if 'turnos' in abas_para_salvar: save_ws('turnos', st.session_state['turnos'])
+        if 'equipe' in abas_para_salvar: save_ws('equipe', st.session_state['equipe'])
+        if 'vendas' in abas_para_salvar: save_ws('vendas', st.session_state['vendas'])
+        if 'config' in abas_para_salvar: save_ws('config', st.session_state['config'])
+        if 'aniversarios' in abas_para_salvar: save_ws('aniversarios', st.session_state['aniversarios'])
+        if 'usuarios' in abas_para_salvar: save_ws('usuarios', st.session_state['usuarios'])
+        if 'log_acessos' in abas_para_salvar: save_ws('log_acessos', st.session_state['log_acessos'])
+        if 'escalas' in abas_para_salvar: save_ws('escalas', st.session_state['escalas'])
+        if 'log' in abas_para_salvar: save_ws('log', pd.DataFrame(st.session_state['processados_list']))
     except Exception as e:
-        st.error(f"Erro ao salvar dados: {e}")
+        st.error(f"Erro ao salvar dados (Aguarde o reset da API): {e}")
 
 # ==========================================
 # 🔓 TELA DE LOGIN
@@ -211,7 +232,9 @@ if not st.session_state['autenticado']:
                         novo_log = pd.DataFrame([{'Data/Hora': agora, 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado'], 'Dispositivo': disp}])
                         
                         st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])), novo_log], ignore_index=True)
-                        salvar_dados()
+                        
+                        # Salva SOMENTE o log de acesso (Super rápido)
+                        salvar_dados(['log_acessos'])
                         time.sleep(1.0)
                         st.rerun()
                     else:
@@ -219,7 +242,7 @@ if not st.session_state['autenticado']:
     st.stop()
 
 # ==========================================
-# ⚙️ FUNÇÕES DE CÁLCULO (O CÉREBRO DO SISTEMA)
+# ⚙️ FUNÇÕES DE CÁLCULO
 # ==========================================
 def f_br(val): return "0,00" if pd.isna(val) else "{:,.2f}".format(val).replace(",", "X").replace(".", ",").replace("X", ".")
 def f_int_br(val): return "0" if pd.isna(val) else "{:,.0f}".format(val).replace(",", ".")
@@ -239,7 +262,6 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
         df_base = escala_do_mes.copy()
         df_cadastro = st.session_state['equipe'][['Nome', 'Status', 'Cargo']].copy()
         df_base = df_base.merge(df_cadastro, on='Nome', how='left')
-        
         if 'Cargo_x' in df_base.columns:
             df_base['Cargo'] = df_base.apply(lambda r: r['Cargo_x'] if pd.notna(r['Cargo_x']) and str(r['Cargo_x']).strip() != "" else r['Cargo_y'], axis=1)
             df_base.drop(columns=['Cargo_x', 'Cargo_y'], inplace=True)
@@ -258,7 +280,6 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
 
     if not df.empty:
         df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
-        
         def extrair_horas(t):
             matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
             if len(matches) >= 2:
@@ -266,15 +287,9 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
                 h2, m2 = matches[-1]
                 t1 = int(h1)*60 + (int(m1) if m1 else 0)
                 t2 = int(h2)*60 + (int(m2) if m2 else 0)
-                
-                if t2 <= t1: 
-                    t2 += 24*60
-                    
+                if t2 <= t1: t2 += 24*60
                 total_horas = (t2 - t1) / 60.0
-                
-                if total_horas > 15.0 and int(h2) < 12:
-                    total_horas -= 12.0
-                    
+                if total_horas > 15.0 and int(h2) < 12: total_horas -= 12.0
                 return round(total_horas, 2)
             return 0.0
 
@@ -300,12 +315,8 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
                 df['Meta GA (Salva-Vidas)'] = df['Cargo'].apply(define_meta_ga)
                 df['GC %'] = df.apply(lambda r: r['GC %'] + 0.10 if (r['GC %'] < 0.90 and r['GA'] >= r['Meta GA (Salva-Vidas)']) else r['GC %'], axis=1)
             df = df.sort_values(by=['Posto', 'Carga_Horaria', 'Turno'], ascending=[True, False, True])
-        
     return df
 
-# ==========================================
-# MOTOR GERADOR DE EXCEL E PDF
-# ==========================================
 def gerar_excel(df, agrupar_por=None):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -317,8 +328,7 @@ def gerar_excel(df, agrupar_por=None):
                 aba_nome = re.sub(r'[\\/*?:\[\]]', '', str(g))[:31]
                 if not aba_nome: aba_nome = "Relatorio"
                 df_g.to_excel(writer, index=False, sheet_name=aba_nome)
-        else:
-            df.to_excel(writer, index=False, sheet_name='Relatório')
+        else: df.to_excel(writer, index=False, sheet_name='Relatório')
     return buffer.getvalue()
 
 def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
@@ -347,20 +357,12 @@ def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
             data = [[Paragraph(safe_text(col), header_style) for col in df_tabela.columns]]
             for _, row in df_tabela.iterrows():
                 data.append([Paragraph(safe_text(val), cell_style) for val in row.values])
-                
             page_width = landscape(A4)[0] - 30
             pesos = [max(len(safe_text(c)), df_tabela[c].astype(str).apply(lambda x: len(safe_text(x))).max() if len(df_tabela)>0 else 5) for c in df_tabela.columns]
             col_widths = [(p / sum(pesos)) * page_width for p in pesos]
             
             table = Table(data, colWidths=col_widths, repeatRows=1)
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1e293b")),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ]))
+            table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1e293b")), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('GRID', (0, 0), (-1, -1), 0.5, colors.grey), ('BOTTOMPADDING', (0, 0), (-1, -1), 4), ('TOPPADDING', (0, 0), (-1, -1), 4)]))
             return table
 
         if agrupar_por and agrupar_por in df.columns:
@@ -383,7 +385,7 @@ def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
 # 🏠 SISTEMA PRINCIPAL (LOGADO)
 # ==========================================
 if 'empresas' not in st.session_state: 
-    with st.spinner("Conectando ao banco de dados..."):
+    with st.spinner("Conectando e Baixando Dados da Nuvem..."):
         carregar_dados()
 
 with st.sidebar:
@@ -397,7 +399,7 @@ with st.sidebar:
     
     st.markdown("---")
     if st.button("🔄 Sincronizar Google", use_container_width=True):
-        with st.spinner("Atualizando..."):
+        with st.spinner("Atualizando Base..."):
             carregar_dados()
         st.success("Sincronizado!")
         time.sleep(1)
@@ -422,12 +424,11 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.caption("Versão 15.1 | Anti-Ghost + Escala Fixa")
+    st.caption("Versão 16.0 | API Otimizada 🚀")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
     st.header("📊 Dashboard Operacional")
-    
     with st.container(border=True):
         col_f1, col_f2 = st.columns(2)
         with col_f1:
@@ -440,31 +441,20 @@ if menu == "📊 Painel Geral":
 
     if not df.empty:
         colunas_tabela = ['Turno', 'Cargo', 'Nome', 'Atendimentos', 'Atendimentos %', 'Litragem', 'GC', 'GC %', 'GA', 'Meta GA (Salva-Vidas)', 'GA %', 'S10 - A', 'S10 - A %', 'ETANOL', 'ETANOL %']
-
         for posto in sorted(df['Posto'].unique()):
             st.subheader(f"🏢 {posto}")
             df_posto = df[df['Posto'] == posto]
-            
             for caixa in df_posto['Caixa_Visual'].unique():
                 df_caixa = df_posto[df_posto['Caixa_Visual'] == caixa]
-                
                 with st.container(border=True):
                     qtd_equipe = len(df_caixa)
                     ref_texto = df_caixa['Competição (Ref.)'].iloc[0]
-                    
                     if "Agrupados" in caixa:
                         turnos_misturados = " / ".join(sorted(df_caixa['Turno'].unique()))
                         st.markdown(f"**{caixa}:** {turnos_misturados} &nbsp;&nbsp;|&nbsp;&nbsp; 👥 {qtd_equipe} Colaboradores")
                     else:
                         st.markdown(f"**{caixa}** &nbsp;&nbsp;|&nbsp;&nbsp; **⚖️ {ref_texto}** &nbsp;&nbsp;|&nbsp;&nbsp; 👥 {qtd_equipe} Colaborador(es)")
-                    
-                    st.dataframe(
-                        df_caixa[colunas_tabela].style.map(cor_style, subset=[c for c in colunas_tabela if '%' in c]).format({
-                            'Atendimentos': f_int_br, 'Litragem': f_br, 'GC': f_br, 'GA': f_br, 'Meta GA (Salva-Vidas)': f_br, 'S10 - A': f_br, 'ETANOL': f_br,
-                            'Atendimentos %': f_pct, 'GC %': f_pct, 'GA %': f_pct, 'S10 - A %': f_pct, 'ETANOL %': f_pct
-                        }), 
-                        use_container_width=True, hide_index=True
-                    )
+                    st.dataframe(df_caixa[colunas_tabela].style.map(cor_style, subset=[c for c in colunas_tabela if '%' in c]).format({'Atendimentos': f_int_br, 'Litragem': f_br, 'GC': f_br, 'GA': f_br, 'Meta GA (Salva-Vidas)': f_br, 'S10 - A': f_br, 'ETANOL': f_br, 'Atendimentos %': f_pct, 'GC %': f_pct, 'GA %': f_pct, 'S10 - A %': f_pct, 'ETANOL %': f_pct}), use_container_width=True, hide_index=True)
             
             st.markdown(f"**Resumo de Desempenho - {posto}**")
             c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -489,7 +479,6 @@ if menu == "📊 Painel Geral":
         st.markdown("<br>", unsafe_allow_html=True)
         col_pdf, col_excel = st.columns(2)
         df_export = df[['Posto'] + colunas_tabela].copy()
-        
         for col, func in {'Atendimentos': f_int_br, 'Atendimentos %': f_pct, 'Litragem': f_br, 'GC': f_br, 'GC %': f_pct, 'GA': f_br, 'Meta GA (Salva-Vidas)': f_br, 'GA %': f_pct, 'S10 - A': f_br, 'S10 - A %': f_pct, 'ETANOL': f_br, 'ETANOL %': f_pct}.items():
             if col in df_export.columns: df_export[col] = df_export[col].apply(func)
         
@@ -500,13 +489,11 @@ if menu == "📊 Painel Geral":
             else: st.warning("⚠️ Instale: `pip install reportlab`")
         with col_excel:
             st.download_button("📊 Baixar Painel (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Painel_{mes_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
-        st.info("Nenhum dado encontrado ou todos os colaboradores estão inativos.")
+    else: st.info("Nenhum dado encontrado ou todos os colaboradores estão inativos.")
 
 # --- TELA: BONIFICAÇÃO ---
 elif menu == "💰 Bonificação":
     st.header("💰 Painel Financeiro e Comissões")
-
     pct_dia_atual = float(st.session_state['config']['Meta_Dia'].iloc[0])
     pct_noite_atual = float(st.session_state['config']['Meta_Noite'].iloc[0])
 
@@ -515,17 +502,14 @@ elif menu == "💰 Bonificação":
         with col_f1:
             meses_disp = sorted(st.session_state['vendas']['Mes'].unique(), reverse=True)
             mes_sel_b = st.selectbox("📅 Mês", meses_disp if meses_disp else ["Sem Vendas"], key='mes_boni')
-        with col_f2:
-            posto_sel_b = st.selectbox("🏢 Unidade", ["Todos"] + list(st.session_state['empresas']['Posto']), key='posto_boni')
-        with col_f3:
-            pct_caixa_dia = st.number_input("☀️ Meta CX MANHÃ (%)", value=pct_dia_atual, step=0.01, format="%.2f")
-        with col_f4:
-            pct_caixa_noite = st.number_input("🌙 Meta CX NOITE (%)", value=pct_noite_atual, step=0.01, format="%.2f")
+        with col_f2: posto_sel_b = st.selectbox("🏢 Unidade", ["Todos"] + list(st.session_state['empresas']['Posto']), key='posto_boni')
+        with col_f3: pct_caixa_dia = st.number_input("☀️ Meta CX MANHÃ (%)", value=pct_dia_atual, step=0.01, format="%.2f")
+        with col_f4: pct_caixa_noite = st.number_input("🌙 Meta CX NOITE (%)", value=pct_noite_atual, step=0.01, format="%.2f")
 
     if pct_caixa_dia != pct_dia_atual or pct_caixa_noite != pct_noite_atual:
         st.session_state['config']['Meta_Dia'] = pct_caixa_dia
         st.session_state['config']['Meta_Noite'] = pct_caixa_noite
-        salvar_dados()
+        salvar_dados(['config']) # 🚀 Otimizado!
 
     df_boni = calcular_dataframe_resultados(mes_sel_b, posto_sel_b)
 
@@ -566,19 +550,11 @@ elif menu == "💰 Bonificação":
         
         st.subheader("📝 Folha de Pagamento Detalhada")
         with st.container(border=True):
-            st.dataframe(
-                df_boni[colunas_boni].style.format({
-                    'Atendimentos': f_int_br, 'Part. Atendimentos (%)': f_pct, '💰 Bonificação (R$)': f_moeda,
-                    'Litragem': f_br, 'Part. Litragem (%)': f_pct, 'Mix (GC + GA)': f_br, 'GC': f_br,
-                    'Participação GC (%)': f_pct, 'GA': f_br, '💰 Bonificação GA (R$)': f_moeda,
-                    '💰 Bônus Caixa (R$)': f_moeda, '💰 Total a Receber (R$)': f_moeda
-                }), use_container_width=True, hide_index=True
-            )
+            st.dataframe(df_boni[colunas_boni].style.format({'Atendimentos': f_int_br, 'Part. Atendimentos (%)': f_pct, '💰 Bonificação (R$)': f_moeda, 'Litragem': f_br, 'Part. Litragem (%)': f_pct, 'Mix (GC + GA)': f_br, 'GC': f_br, 'Participação GC (%)': f_pct, 'GA': f_br, '💰 Bonificação GA (R$)': f_moeda, '💰 Bônus Caixa (R$)': f_moeda, '💰 Total a Receber (R$)': f_moeda}), use_container_width=True, hide_index=True)
             
         st.markdown("<br>", unsafe_allow_html=True)
         col_pdf, col_excel = st.columns(2)
         df_export = df_boni[colunas_boni].copy()
-        
         for col, func in {'Atendimentos': f_int_br, 'Part. Atendimentos (%)': f_pct, '💰 Bonificação (R$)': f_moeda, 'Litragem': f_br, 'Part. Litragem (%)': f_pct, 'Mix (GC + GA)': f_br, 'GC': f_br, 'Participação GC (%)': f_pct, 'GA': f_br, '💰 Bonificação GA (R$)': f_moeda, '💰 Bônus Caixa (R$)': f_moeda, '💰 Total a Receber (R$)': f_moeda}.items():
             if col in df_export.columns: df_export[col] = df_export[col].apply(func)
                 
@@ -588,8 +564,7 @@ elif menu == "💰 Bonificação":
                 if pdf_bytes: st.download_button("📄 Baixar Folha (PDF)", data=pdf_bytes, file_name=f"Folha_{mes_sel_b}.pdf", mime="application/pdf", type="primary")
         with col_excel:
             st.download_button("📊 Baixar Folha (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Folha_{mes_sel_b}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
-        st.info("Nenhum colaborador ativo.")
+    else: st.info("Nenhum colaborador ativo.")
 
 # --- TELA: ESCALA MENSAL ---
 elif menu == "📅 Escala Mensal":
@@ -617,14 +592,12 @@ elif menu == "📅 Escala Mensal":
                 
                 for sheet in sheet_names:
                     df_e = pd.read_excel(arq_escala, sheet_name=sheet, header=None) if is_excel else pd.read_csv(arq_escala, header=None, sep=None, engine='python', encoding='utf-8-sig')
-                    
                     posto_atual = None
                     mes_final = mes_ref_escala
                     
                     if "Auto-Detectar" in mes_ref_escala:
                         m_file = re.search(r'(0[1-9]|1[0-2])[-_](20[2-3][0-9])', arq_escala.name)
-                        if m_file:
-                            mes_final = f"{m_file.group(1)}/{m_file.group(2)}"
+                        if m_file: mes_final = f"{m_file.group(1)}/{m_file.group(2)}"
                         else:
                             encontrou_mes = False
                             meses_map = {'JANEIRO':'01', 'FEVEREIRO':'02', 'MARÇO':'03', 'MARCO':'03', 'ABRIL':'04', 'MAIO':'05', 'JUNHO':'06', 'JULHO':'07', 'AGOSTO':'08', 'SETEMBRO':'09', 'OUTUBRO':'10', 'NOVEMBRO':'11', 'DEZEMBRO':'12'}
@@ -633,18 +606,15 @@ elif menu == "📅 Escala Mensal":
                                 m_txt = re.search(r'(0[1-9]|1[0-2])/(20[2-3][0-9])', linha_texto)
                                 if m_txt:
                                     mes_final = f"{m_txt.group(1)}/{m_txt.group(2)}"
-                                    encontrou_mes = True
-                                    break
+                                    encontrou_mes = True; break
                                 for m_nome, m_num in meses_map.items():
                                     if m_nome in linha_texto:
                                         ano_m = re.search(r'20[2-3][0-9]', linha_texto)
                                         ano_str = ano_m.group(0) if ano_m else datetime.today().strftime("%Y")
                                         mes_final = f"{m_num}/{ano_str}"
-                                        encontrou_mes = True
-                                        break
+                                        encontrou_mes = True; break
                                 if encontrou_mes: break
-                            if not encontrou_mes:
-                                mes_final = datetime.today().strftime("%m/%Y")
+                            if not encontrou_mes: mes_final = datetime.today().strftime("%m/%Y")
                     
                     for idx, row in df_e.iterrows():
                         if len(row) > 1:
@@ -655,11 +625,9 @@ elif menu == "📅 Escala Mensal":
                                 for val in [col0, col1]:
                                     val_up = val.upper()
                                     if val_up and val_up not in palavras_ignoradas and not re.search(r'\d{1,2}H', val_up) and not val_up.isnumeric() and not "/" in val_up:
-                                        posto_atual = val_up
-                                        break
+                                        posto_atual = val_up; break
                             
                             posto_final = posto_atual if posto_atual else (posto_lote_escala if posto_lote_escala != "🔍 Detectar Automaticamente (Topo da Planilha)" else "POSTO NÃO IDENTIFICADO")
-                            
                             col0_up = col0.upper()
                             col1_up = col1.upper()
                             
@@ -667,7 +635,6 @@ elif menu == "📅 Escala Mensal":
                                 cargo = "Frentista"
                                 if "CX DIA" in col0_up: cargo = "CX MANHÃ"
                                 elif "CX NOITE" in col0_up: cargo = "CX NOITE"
-                                
                                 turno_limpo = col0_up.replace("- CX DIA", "").replace("CX DIA", "").replace("- CX NOITE", "").replace("CX NOITE", "").strip()
                                 
                                 if "-" in col1_up and "IMPAR" not in col1_up:
@@ -675,101 +642,70 @@ elif menu == "📅 Escala Mensal":
                                     if len(nomes) >= 2:
                                         nome_impar = nomes[0].strip()
                                         nome_par = nomes[1].strip()
-                                        
                                         if nome_impar: novas_escalas.append({'Mes': mes_final, 'Nome': nome_impar, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
                                         if nome_par: novas_escalas.append({'Mes': mes_final, 'Nome': nome_par, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
-                                
                                 elif "IMPAR" not in col1_up and "-" not in col1_up:
                                     nome_unico = col1_up.strip()
-                                    if nome_unico not in ["NAN", ""]:
-                                        novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
+                                    if nome_unico not in ["NAN", ""]: novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
                                 
-                if novas_escalas:
-                    df_nova_escala = pd.DataFrame(novas_escalas)
-                    
-                    if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
-                    if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
-                        st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
-                    st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
-                    
-                    qtd_postos_novos = 0
-                    qtd_turnos_novos = 0
-                    qtd_colabs_novos = 0
-                    
-                    postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
-                    postos_na_planilha = df_nova_escala['Posto'].unique()
-                    
-                    novas_empresas_df = []
-                    for p in postos_na_planilha:
-                        if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
-                            novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'})
-                            qtd_postos_novos += 1
-                            
-                    if novas_empresas_df:
-                        st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
+            if novas_escalas:
+                df_nova_escala = pd.DataFrame(novas_escalas)
+                if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
+                if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
+                    st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
+                st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
+                
+                qtd_postos_novos, qtd_turnos_novos, qtd_colabs_novos = 0, 0, 0
+                
+                postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
+                novas_empresas_df = []
+                for p in df_nova_escala['Posto'].unique():
+                    if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
+                        novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'}); qtd_postos_novos += 1
+                if novas_empresas_df: st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
 
-                    turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
-                    turnos_na_planilha = df_nova_escala['Turno'].unique()
+                turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
+                novos_turnos_df = []
+                for t in df_nova_escala['Turno'].unique():
+                    if t not in turnos_existentes:
+                        novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'}); qtd_turnos_novos += 1
+                if novos_turnos_df: st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
                     
-                    novos_turnos_df = []
-                    for t in turnos_na_planilha:
-                        if t not in turnos_existentes:
-                            novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'})
-                            qtd_turnos_novos += 1
-                            
-                    if novos_turnos_df:
-                        st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
-                        
-                    nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
-                    nomes_processados_agora = set() 
-                    novos_colabs_df = []
-                    
-                    for _, row in df_nova_escala.iterrows():
-                        nome_val = row['Nome']
-                        if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
-                            novos_colabs_df.append({
-                                'Posto': row['Posto'],
-                                'Turno': row['Turno'],
-                                'Cargo': row['Cargo'],
-                                'Nome': nome_val,
-                                'Status': 'Ativo'
-                            })
-                            nomes_processados_agora.add(nome_val)
-                            qtd_colabs_novos += 1
-                            
-                    if novos_colabs_df:
-                        st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
+                nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
+                nomes_processados_agora = set() 
+                novos_colabs_df = []
+                for _, row in df_nova_escala.iterrows():
+                    nome_val = row['Nome']
+                    if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
+                        novos_colabs_df.append({'Posto': row['Posto'], 'Turno': row['Turno'], 'Cargo': row['Cargo'], 'Nome': nome_val, 'Status': 'Ativo'})
+                        nomes_processados_agora.add(nome_val); qtd_colabs_novos += 1
+                if novos_colabs_df: st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
 
-                    salvar_dados()
-                    
-                    mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
-                    if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
-                    if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
-                    if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
-                    
-                    st.success(mensagem_final)
-                    time.sleep(3) 
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Não encontrei o padrão de horários e nomes na planilha. Revise o arquivo.")
-            except Exception as e:
-                st.error(f"Erro ao processar o arquivo: {e}")
+                # 🚀 OTIMIZADO: Salva SÓ as abas alteradas
+                salvar_dados(['escalas', 'empresas', 'turnos', 'equipe'])
+                
+                mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
+                if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
+                if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
+                if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
+                st.success(mensagem_final)
+                time.sleep(3) 
+                st.rerun()
+            except Exception as e: st.error(f"Erro ao processar o arquivo: {e}")
 
     if not st.session_state.get('escalas', pd.DataFrame()).empty:
         st.markdown("---")
         st.subheader("📋 Banco de Escalas Mensais")
-        
         c_del1, c_del2 = st.columns([2, 1])
         meses_salvos = sorted(st.session_state['escalas']['Mes'].unique(), reverse=True)
         mes_excluir = c_del1.selectbox("Selecione o Mês para Excluir a Escala", meses_salvos)
         
         if c_del2.button("🗑️ Excluir Escala do Mês", type="primary", use_container_width=True):
             st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_excluir]
-            salvar_dados()
-            st.success(f"🗑️ A escala de {mes_excluir} foi removida permanentemente!")
+            salvar_dados(['escalas']) # 🚀 Otimizado!
+            st.success(f"🗑️ A escala de {mes_excluir} foi removida!")
             time.sleep(1.5)
             st.rerun()
-            
         st.dataframe(st.session_state['escalas'].iloc[::-1], use_container_width=True, hide_index=True)
 
 # --- TELA: ANIVERSARIANTES ---
@@ -807,7 +743,6 @@ elif menu == "🎂 Aniversariantes":
             if mes_filtro != "Todos": df_niver = df_niver[df_niver['Mês Nome'] == mes_filtro]
             if posto_filtro != "Todos": df_niver = df_niver[df_niver['Posto'] == posto_filtro]
             if genero_filtro != "Todos": df_niver = df_niver[df_niver['Gênero'] == genero_filtro]
-            
             df_niver = df_niver.sort_values(by=['Mês', 'Dia'])
             
             if not df_niver.empty:
@@ -830,7 +765,6 @@ elif menu == "🎂 Aniversariantes":
         with st.container(border=True):
             posto_lote = st.selectbox("Vinculação de Empresa:", ["🔍 Detectar da Planilha / Abas do Excel"] + list(st.session_state['empresas']['Posto']))
             arq_niver = st.file_uploader("Selecione a planilha", type=["xlsx", "xls", "csv"])
-            
             if arq_niver and st.button("🚀 Processar", type="primary"):
                 try:
                     lista_dfs = []
@@ -869,13 +803,12 @@ elif menu == "🎂 Aniversariantes":
                                 if posto_lote != "🔍 Detectar da Planilha / Abas do Excel": df_novo['Posto'] = posto_lote
                                 else: df_novo['Posto'] = str(sheet).strip().upper() if is_excel else (df_novo['Posto_P'].astype(str).str.strip().str.upper() if 'Posto_P' in df_novo.columns else 'Não Vinculado')
                                 if 'Posto_P' in df_novo.columns: df_novo.drop(columns=['Posto_P'], inplace=True)
-                                
                                 lista_dfs.append(df_novo)
 
                     if lista_dfs:
                         df_final = pd.concat(lista_dfs)
                         st.session_state['aniversarios'] = pd.concat([st.session_state.get('aniversarios', pd.DataFrame()), df_final]).drop_duplicates(subset=['Nome'], keep='last')
-                        salvar_dados()
+                        salvar_dados(['aniversarios']) # 🚀 Otimizado!
                         st.success("✅ Registros processados e salvos com sucesso!")
                         time.sleep(1)
                         st.rerun()
@@ -885,7 +818,7 @@ elif menu == "🎂 Aniversariantes":
             st.markdown("---")
             if not st.session_state.get('aniversarios', pd.DataFrame()).empty and st.button("🗑️ Limpar toda a base"):
                 st.session_state['aniversarios'] = pd.DataFrame(columns=['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
-                salvar_dados()
+                salvar_dados(['aniversarios']) # 🚀 Otimizado!
                 st.rerun()
 
 # --- TELA: CADASTRO EMPRESA ---
@@ -899,7 +832,7 @@ elif menu == "🏢 Cadastro Empresa":
                 novo_posto = st.text_input("Nome da Empresa (Igual ao cabeçalho do relatório)*").upper()
                 if st.form_submit_button("Cadastrar Posto", type="primary") and novo_posto:
                     st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame([{'Posto': novo_posto, 'Status': 'Ativo'}])], ignore_index=True)
-                    salvar_dados()
+                    salvar_dados(['empresas']) # 🚀 Otimizado!
                     st.success(f"✅ {novo_posto} cadastrado com sucesso!")
                     time.sleep(1)
                     st.rerun()
@@ -917,7 +850,7 @@ elif menu == "🏢 Cadastro Empresa":
                         idx = st.session_state['empresas'].index[st.session_state['empresas']['Posto'] == emp_para_editar][0]
                         st.session_state['empresas'].at[idx, 'Posto'] = novo_nome_emp
                         st.session_state['empresas'].at[idx, 'Status'] = novo_status_emp
-                        salvar_dados()
+                        salvar_dados(['empresas', 'equipe']) # 🚀 Otimizado!
                         st.success("✅ Atualizado!")
                         time.sleep(1)
                         st.rerun()
@@ -927,19 +860,17 @@ elif menu == "🏢 Cadastro Empresa":
             if not st.session_state['empresas'].empty:
                 emp_inativar = st.selectbox("Gerenciar Empresa", st.session_state['empresas']['Posto'])
                 col1, col2 = st.columns(2)
-                
                 if col1.button("⛔ Apenas Inativar", use_container_width=True):
                     idx = st.session_state['empresas'].index[st.session_state['empresas']['Posto'] == emp_inativar][0]
                     st.session_state['empresas'].at[idx, 'Status'] = 'Inativo'
-                    salvar_dados()
+                    salvar_dados(['empresas']) # 🚀 Otimizado!
                     st.success("✅ Empresa Inativada!")
                     time.sleep(1)
                     st.rerun()
-                    
                 if col2.button("🗑️ Excluir Definitivamente", type="primary", use_container_width=True):
                     idx = st.session_state['empresas'].index[st.session_state['empresas']['Posto'] == emp_inativar][0]
                     st.session_state['empresas'] = st.session_state['empresas'].drop(idx).reset_index(drop=True)
-                    salvar_dados()
+                    salvar_dados(['empresas']) # 🚀 Otimizado!
                     st.success("🗑️ Empresa Excluída!")
                     time.sleep(1)
                     st.rerun()
@@ -959,7 +890,7 @@ elif menu == "⏰ Cadastro Turnos":
                 novo_turno = st.text_input("Descrição do Turno (Ex: 06h às 18h)*").upper()
                 if st.form_submit_button("Criar Turno", type="primary") and novo_turno:
                     st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame([{'Turno': novo_turno, 'Status': 'Ativo'}])], ignore_index=True)
-                    salvar_dados()
+                    salvar_dados(['turnos']) # 🚀 Otimizado!
                     st.success("✅ Turno Criado!")
                     time.sleep(1)
                     st.rerun()
@@ -977,7 +908,7 @@ elif menu == "⏰ Cadastro Turnos":
                         idx = st.session_state['turnos'].index[st.session_state['turnos']['Turno'] == turno_editar][0]
                         st.session_state['turnos'].at[idx, 'Turno'] = novo_nome_turno
                         st.session_state['turnos'].at[idx, 'Status'] = novo_status_turno
-                        salvar_dados()
+                        salvar_dados(['turnos', 'equipe']) # 🚀 Otimizado!
                         st.success("✅ Turno Atualizado!")
                         time.sleep(1)
                         st.rerun()
@@ -987,19 +918,17 @@ elif menu == "⏰ Cadastro Turnos":
             if not st.session_state['turnos'].empty:
                 turno_inativar = st.selectbox("Gerenciar Turno", st.session_state['turnos']['Turno'])
                 col1, col2 = st.columns(2)
-                
                 if col1.button("⛔ Apenas Inativar", use_container_width=True):
                     idx = st.session_state['turnos'].index[st.session_state['turnos']['Turno'] == turno_inativar][0]
                     st.session_state['turnos'].at[idx, 'Status'] = 'Inativo'
-                    salvar_dados()
+                    salvar_dados(['turnos']) # 🚀 Otimizado!
                     st.success("✅ Turno Inativado!")
                     time.sleep(1)
                     st.rerun()
-                    
                 if col2.button("🗑️ Excluir Definitivamente", type="primary", use_container_width=True):
                     idx = st.session_state['turnos'].index[st.session_state['turnos']['Turno'] == turno_inativar][0]
                     st.session_state['turnos'] = st.session_state['turnos'].drop(idx).reset_index(drop=True)
-                    salvar_dados()
+                    salvar_dados(['turnos']) # 🚀 Otimizado!
                     st.success("🗑️ Turno Excluído!")
                     time.sleep(1)
                     st.rerun()
@@ -1033,7 +962,7 @@ elif menu == "👤 Cadastro Colaborador":
                         cargo_f = st.selectbox("Cargo", ["Frentista", "CX MANHÃ", "CX NOITE", "Gerente", "Chefe de Pista", "Diarista/Mensalista"])
                     if st.form_submit_button("Salvar Colaborador", type="primary") and nome_f:
                         st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame([{'Posto': posto_f, 'Turno': turno_f, 'Cargo': cargo_f, 'Nome': nome_f, 'Status': 'Ativo'}])], ignore_index=True)
-                        salvar_dados()
+                        salvar_dados(['equipe']) # 🚀 Otimizado!
                         st.success("✅ Colaborador cadastrado!")
                         time.sleep(1)
                         st.rerun()
@@ -1063,7 +992,7 @@ elif menu == "👤 Cadastro Colaborador":
                         st.session_state['equipe'].at[idx, 'Cargo'] = novo_cargo_e
                         st.session_state['equipe'].at[idx, 'Nome'] = novo_nome_e
                         st.session_state['equipe'].at[idx, 'Status'] = novo_status_e
-                        salvar_dados()
+                        salvar_dados(['equipe']) # 🚀 Otimizado!
                         st.success("✅ Informações atualizadas!")
                         time.sleep(1)
                         st.rerun()
@@ -1079,15 +1008,14 @@ elif menu == "👤 Cadastro Colaborador":
                     if col1.button("⛔ Apenas Inativar", use_container_width=True):
                         idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_acao][0]
                         st.session_state['equipe'].at[idx, 'Status'] = 'Inativo'
-                        salvar_dados()
+                        salvar_dados(['equipe']) # 🚀 Otimizado!
                         st.success("✅ Colaborador inativado!")
                         time.sleep(1.5)
                         st.rerun()
-                        
                     if col2.button("🗑️ Excluir Definitivamente", type="primary", use_container_width=True):
                         idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_acao][0]
                         st.session_state['equipe'] = st.session_state['equipe'].drop(idx).reset_index(drop=True)
-                        salvar_dados()
+                        salvar_dados(['equipe']) # 🚀 Otimizado!
                         st.success("🗑️ Colaborador apagado do sistema para sempre!")
                         time.sleep(1.5)
                         st.rerun()
@@ -1095,7 +1023,6 @@ elif menu == "👤 Cadastro Colaborador":
 # --- TELA: IMPORTAR PLANILHAS DE VENDAS ---
 elif menu == "📈 Importar Planilhas":
     st.header("📈 Importação de Resultados (Vendas e Metas)")
-    
     col_u, col_h = st.columns([1.5, 1])
     with col_u:
         with st.container(border=True):
@@ -1149,7 +1076,6 @@ elif menu == "📈 Importar Planilhas":
                                     df_f = df_l[[c_at, c_vl]].dropna().copy()
                                     df_f.rename(columns={c_at: 'Nome', c_vl: 'Val'}, inplace=True)
                                     df_f['Nome'] = df_f['Nome'].apply(lambda x: re.sub(r'^\s*\d+\s*-\s*', '', str(x)).replace('-', '').strip().upper())
-                                    
                                     df_f['Val'] = df_f['Val'].apply(lambda v: float(str(v).replace('.', '').replace(',', '.')) if not isinstance(v, (int, float)) else float(v))
                                     for _, r in df_f.iterrows():
                                         nova_l = {'Arquivo': id_arq, 'Nome': r['Nome'], 'Mes': mes_ref, 'Atendimentos': 0, 'GC': 0, 'GA': 0, 'S10 - A': 0, 'ETANOL': 0}
@@ -1157,7 +1083,7 @@ elif menu == "📈 Importar Planilhas":
                                         st.session_state['vendas'] = pd.concat([st.session_state['vendas'], pd.DataFrame([nova_l])], ignore_index=True)
                                     
                                     st.session_state['processados_list'].append({'id': id_arq, 'Arquivo': arq.name, 'Mês': mes_ref, 'Tipo': item_nome})
-                                    salvar_dados()
+                                    salvar_dados(['vendas', 'log']) # 🚀 Otimizado!
                                     st.success(f"✅ {item_nome} processado!")
                                     
                                 elif tipo_rel == "METAS":
@@ -1172,16 +1098,13 @@ elif menu == "📈 Importar Planilhas":
                                     if col_hora_name and col_pct_name:
                                         df_l['H_INT'] = df_l[col_hora_name].apply(lambda v: int(re.search(r'\d+', str(v)).group()) if re.search(r'\d+', str(v)) else -1)
                                         df_l['P_VAL'] = df_l[col_pct_name].apply(lambda v: float(str(v).replace('%','').replace(',','.')) if pd.notna(v) else 0.0)
-                                        
                                         if df_l['P_VAL'].sum() <= 2.0: df_l['P_VAL'] = df_l['P_VAL'] * 100.0
-                                            
                                         soma_manha = df_l[(df_l['H_INT'] >= 4) & (df_l['H_INT'] <= 16)]['P_VAL'].sum()
                                         soma_noite = df_l[(df_l['H_INT'] >= 17) & (df_l['H_INT'] <= 23)]['P_VAL'].sum()
-                                        
                                         st.session_state['config']['Meta_Dia'] = soma_manha / 2.0
                                         st.session_state['config']['Meta_Noite'] = soma_noite / 2.0
                                         st.session_state['processados_list'].append({'id': id_arq, 'Arquivo': arq.name, 'Mês': mes_ref, 'Tipo': item_nome})
-                                        salvar_dados()
+                                        salvar_dados(['config', 'log']) # 🚀 Otimizado!
                                         st.success(f"✅ {item_nome} importado! Metas atualizadas.")
                         except Exception as e: st.error(f"Erro em {arq.name}: {e}")
 
@@ -1195,17 +1118,15 @@ elif menu == "📈 Importar Planilhas":
                     if c4.button("❌", key=f"del_{item['id']}", help="Remover"):
                         st.session_state['processados_list'] = [x for x in st.session_state['processados_list'] if x['id'] != item['id']]
                         st.session_state['vendas'] = st.session_state['vendas'][st.session_state['vendas']['Arquivo'] != item['id']]
-                        salvar_dados()
+                        salvar_dados(['vendas', 'log']) # 🚀 Otimizado!
                         st.rerun()
-
                 st.markdown("---")
                 if st.button("🧹 Limpar TODAS as Importações", use_container_width=True):
                     st.session_state['processados_list'] = []
                     st.session_state['vendas'] = pd.DataFrame(columns=['Arquivo', 'Nome', 'Mes', 'Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL'])
-                    salvar_dados()
+                    salvar_dados(['vendas', 'log']) # 🚀 Otimizado!
                     st.rerun()
-            else:
-                st.info("Nenhum arquivo no histórico.")
+            else: st.info("Nenhum arquivo no histórico.")
 
 # --- TELA: GESTÃO DE ACESSOS ---
 elif menu == "🔐 Gestão de Acessos":
@@ -1232,12 +1153,11 @@ elif menu == "🔐 Gestão de Acessos":
                         else:
                             novo_usr_df = pd.DataFrame([{'Usuario': novo_login, 'Senha': nova_senha, 'Perfil': novo_perfil, 'Status': 'Ativo'}])
                             st.session_state['usuarios'] = pd.concat([st.session_state.get('usuarios', pd.DataFrame()), novo_usr_df], ignore_index=True)
-                            salvar_dados()
+                            salvar_dados(['usuarios']) # 🚀 Otimizado!
                             st.success(f"✅ Usuário '{novo_login}' criado com sucesso!")
                             time.sleep(1.5) 
                             st.rerun()
-                    else:
-                        st.warning("⚠️ Preencha o Login e a Senha.")
+                    else: st.warning("⚠️ Preencha o Login e a Senha.")
 
     with aba_editar_u:
         if st.session_state.get('usuarios', pd.DataFrame()).empty:
@@ -1246,23 +1166,20 @@ elif menu == "🔐 Gestão de Acessos":
             with st.container(border=True):
                 user_editar = st.selectbox("Selecione o Usuário", st.session_state['usuarios']['Usuario'])
                 dados_u = st.session_state['usuarios'][st.session_state['usuarios']['Usuario'] == user_editar].iloc[0]
-                
                 with st.form("form_editar_usuario"):
                     col1, col2, col3 = st.columns(3)
-                    with col1:
-                        senha_u = st.text_input("Nova Senha", value=dados_u['Senha'])
+                    with col1: senha_u = st.text_input("Nova Senha", value=dados_u['Senha'])
                     with col2:
                         perfis = ["Admin", "Operador"]
                         perfil_u = st.selectbox("Perfil", perfis, index=perfis.index(dados_u['Perfil']) if dados_u['Perfil'] in perfis else 0)
-                    with col3:
-                        status_u = st.selectbox("Status", ["Ativo", "Inativo"], index=0 if dados_u['Status'] == 'Ativo' else 1)
+                    with col3: status_u = st.selectbox("Status", ["Ativo", "Inativo"], index=0 if dados_u['Status'] == 'Ativo' else 1)
                         
                     if st.form_submit_button("Atualizar Usuário"):
                         idx = st.session_state['usuarios'].index[st.session_state['usuarios']['Usuario'] == user_editar][0]
                         st.session_state['usuarios'].at[idx, 'Senha'] = senha_u.strip()
                         st.session_state['usuarios'].at[idx, 'Perfil'] = perfil_u
                         st.session_state['usuarios'].at[idx, 'Status'] = status_u
-                        salvar_dados()
+                        salvar_dados(['usuarios']) # 🚀 Otimizado!
                         st.success("✅ Usuário atualizado!")
                         time.sleep(1.0)
                         st.rerun()
@@ -1273,7 +1190,5 @@ elif menu == "🔐 Gestão de Acessos":
     with aba_historico:
         st.subheader("🕵️ Histórico de Acessos Recentes")
         df_logs = st.session_state.get('log_acessos', pd.DataFrame())
-        if df_logs.empty:
-            st.info("Nenhum acesso registrado ainda.")
-        else:
-            st.dataframe(df_logs.tail(50).iloc[::-1], use_container_width=True, hide_index=True)
+        if df_logs.empty: st.info("Nenhum acesso registrado ainda.")
+        else: st.dataframe(df_logs.tail(50).iloc[::-1], use_container_width=True, hide_index=True)
