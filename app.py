@@ -253,19 +253,17 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
     if not df.empty:
         df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
         
-        # 🧠 NOVO CÉREBRO MATEMÁTICO DE HORAS
-        # Agora ele soma multiplos intervalos (Ex: 05h - 11h e 12h - 17h = 11h trabalhadas)
+        # 🧠 CÉREBRO MATEMÁTICO DE HORAS (Soma multiplos intervalos na escala)
         def extrair_horas(t):
             matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
             total_horas = 0.0
             if len(matches) >= 2:
-                # Pega de dupla em dupla (Início do turno - Saída pro almoço / Retorno - Saída final)
                 for i in range(0, len(matches)-1, 2):
                     h1, m1 = matches[i]
                     h2, m2 = matches[i+1]
                     t1 = int(h1)*60 + (int(m1) if m1 else 0)
                     t2 = int(h2)*60 + (int(m2) if m2 else 0)
-                    if t2 <= t1: t2 += 24*60 # Caso vire a noite
+                    if t2 <= t1: t2 += 24*60
                     total_horas += round((t2 - t1) / 60.0, 2)
             return total_horas
 
@@ -379,7 +377,7 @@ if 'empresas' not in st.session_state:
 
 with st.sidebar:
     st.title("⛽ AutoPosto Pro")
-    st.write(f"Usuário: **{st.session_state['usuario_logado']}**")
+    st.write(f"Usuário Logado: **{st.session_state['usuario_logado']}**")
     st.markdown("---")
     
     paginas = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
@@ -403,7 +401,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 11.0 | Data Clean")
+    st.caption("Versão 12.0 | Auto-Cadastro Global")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -866,7 +864,6 @@ elif menu == "👤 Cadastro Colaborador":
                         time.sleep(1)
                         st.rerun()
 
-    # 🗑️ NOVO: OPÇÃO DE EXCLUIR DEFINITIVO
     with aba_desligar:
         with st.container(border=True):
             if not st.session_state['equipe'].empty:
@@ -879,7 +876,7 @@ elif menu == "👤 Cadastro Colaborador":
                         idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_acao][0]
                         st.session_state['equipe'].at[idx, 'Status'] = 'Inativo'
                         salvar_dados()
-                        st.success("✅ Colaborador inativado! (Não aparecerá mais nos cálculos mensais, mas o histórico fica salvo).")
+                        st.success("✅ Colaborador inativado!")
                         time.sleep(1.5)
                         st.rerun()
                         
@@ -1010,46 +1007,71 @@ elif menu == "📈 Importar Planilhas":
                     st.info("Nenhum arquivo no histórico.")
 
     with aba_escala:
-        st.info("O sistema lê o seu **Relatório Visual 12x36** e, se achar um **Nome** ou **Turno** novo, ele cadastra sozinho no banco de dados!")
+        st.info("O sistema lê o seu **Relatório Visual 12x36**, detecta a **Empresa no topo**, e auto-cadastra Empresa, Nomes e Turnos!")
         
         with st.container(border=True):
             col1, col2 = st.columns(2)
             mes_ref_escala = col1.text_input("Mês da Escala (Ex: 03/2026)", value=datetime.today().strftime("%m/%Y"))
-            posto_lote_escala = col2.selectbox("Vincular a qual Posto?", st.session_state['empresas']['Posto'] if not st.session_state['empresas'].empty else ["Sem Empresa"])
+            
+            opcoes_posto = ["🔍 Detectar Automaticamente (Topo da Planilha)"]
+            if not st.session_state['empresas'].empty:
+                opcoes_posto.extend(list(st.session_state['empresas']['Posto']))
+            posto_lote_escala = col2.selectbox("Vincular a qual Posto?", opcoes_posto)
             
             arq_escala = st.file_uploader("Upload da Planilha de Escala", type=["xlsx", "xls", "csv"], key="up_escala")
             
             if arq_escala and st.button("🚀 Processar e Auto-Cadastrar", type="primary"):
                 try:
-                    df_e = pd.read_excel(arq_escala, header=None) if arq_escala.name.endswith(('.xlsx', '.xls')) else pd.read_csv(arq_escala, header=None, sep=None, engine='python', encoding='utf-8-sig')
+                    is_excel = arq_escala.name.endswith(('.xlsx', '.xls'))
+                    sheet_names = pd.ExcelFile(arq_escala).sheet_names if is_excel else ['CSV_Unico']
                     
                     novas_escalas = []
+                    palavras_ignoradas = ["", "NAN", "SEGUNDA A SEXTA", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "SABADO", "DOMINGO", "DOMINGO / FERIADO VERMELHO", "FERIADO", "NOMES", "IMPAR - PAR", "IMPAR", "PAR", "ESCALA DA COPA", "ESCALA", "HORÁRIO", "HORARIO"]
                     
-                    for idx, row in df_e.iterrows():
-                        if len(row) > 1:
-                            col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
-                            col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
-                            
-                            if "H" in col0.upper() and col1 != "":
-                                cargo = "Frentista"
-                                if "CX DIA" in col0.upper(): cargo = "CX MANHÃ"
-                                elif "CX NOITE" in col0.upper(): cargo = "CX NOITE"
+                    for sheet in sheet_names:
+                        df_e = pd.read_excel(arq_escala, sheet_name=sheet, header=None) if is_excel else pd.read_csv(arq_escala, header=None, sep=None, engine='python', encoding='utf-8-sig')
+                        
+                        posto_atual = None
+                        
+                        for idx, row in df_e.iterrows():
+                            if len(row) > 1:
+                                col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
+                                col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
                                 
-                                turno_limpo = col0.upper().replace("- CX DIA", "").replace("CX DIA", "").replace("- CX NOITE", "").replace("CX NOITE", "").strip()
+                                # 1. Detectar Empresa no Topo
+                                if posto_atual is None and posto_lote_escala == "🔍 Detectar Automaticamente (Topo da Planilha)":
+                                    for val in [col0, col1]:
+                                        val_up = val.upper()
+                                        if val_up and val_up not in palavras_ignoradas and not re.search(r'\d{1,2}H', val_up) and not val_up.isnumeric():
+                                            posto_atual = val_up
+                                            break
                                 
-                                if "-" in col1 and "IMPAR" not in col1.upper():
-                                    nomes = col1.split("-")
-                                    if len(nomes) >= 2:
-                                        nome_impar = nomes[0].strip().upper()
-                                        nome_par = nomes[1].strip().upper()
-                                        
-                                        if nome_impar: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_impar, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
-                                        if nome_par: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_par, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
+                                posto_final = posto_atual if posto_atual else (posto_lote_escala if posto_lote_escala != "🔍 Detectar Automaticamente (Topo da Planilha)" else "POSTO NÃO IDENTIFICADO")
                                 
-                                elif "IMPAR" not in col1.upper() and "-" not in col1:
-                                    nome_unico = col1.strip().upper()
-                                    if nome_unico.lower() not in ["nan", ""]:
-                                        novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_unico, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diarista/Mensalista'})
+                                # 2. Ler Horários e Nomes
+                                col0_up = col0.upper()
+                                col1_up = col1.upper()
+                                
+                                if "H" in col0_up and col1_up != "":
+                                    cargo = "Frentista"
+                                    if "CX DIA" in col0_up: cargo = "CX MANHÃ"
+                                    elif "CX NOITE" in col0_up: cargo = "CX NOITE"
+                                    
+                                    turno_limpo = col0_up.replace("- CX DIA", "").replace("CX DIA", "").replace("- CX NOITE", "").replace("CX NOITE", "").strip()
+                                    
+                                    if "-" in col1_up and "IMPAR" not in col1_up:
+                                        nomes = col1_up.split("-")
+                                        if len(nomes) >= 2:
+                                            nome_impar = nomes[0].strip()
+                                            nome_par = nomes[1].strip()
+                                            
+                                            if nome_impar: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_impar, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
+                                            if nome_par: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_par, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
+                                    
+                                    elif "IMPAR" not in col1_up and "-" not in col1_up:
+                                        nome_unico = col1_up.strip()
+                                        if nome_unico not in ["NAN", ""]:
+                                            novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diarista/Mensalista'})
                                     
                     if novas_escalas:
                         df_nova_escala = pd.DataFrame(novas_escalas)
@@ -1059,9 +1081,24 @@ elif menu == "📈 Importar Planilhas":
                             st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_ref_escala]
                         st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
                         
+                        qtd_postos_novos = 0
                         qtd_turnos_novos = 0
                         qtd_colabs_novos = 0
                         
+                        # A. Auto-Cadastro de Empresa
+                        postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
+                        postos_na_planilha = df_nova_escala['Posto'].unique()
+                        
+                        novas_empresas_df = []
+                        for p in postos_na_planilha:
+                            if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
+                                novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'})
+                                qtd_postos_novos += 1
+                                
+                        if novas_empresas_df:
+                            st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
+
+                        # B. Auto-Cadastro de Turnos
                         turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
                         turnos_na_planilha = df_nova_escala['Turno'].unique()
                         
@@ -1074,6 +1111,7 @@ elif menu == "📈 Importar Planilhas":
                         if novos_turnos_df:
                             st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
                             
+                        # C. Auto-Cadastro de Colaboradores
                         nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
                         nomes_processados_agora = set() 
                         novos_colabs_df = []
@@ -1097,8 +1135,9 @@ elif menu == "📈 Importar Planilhas":
                         salvar_dados()
                         
                         mensagem_final = f"✅ Escala de {mes_ref_escala} importada! ({len(novas_escalas)} registros)."
-                        if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} novos turnos."
-                        if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} novos colaboradores."
+                        if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
+                        if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
+                        if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
                         
                         st.success(mensagem_final)
                         time.sleep(3) 
@@ -1108,7 +1147,7 @@ elif menu == "📈 Importar Planilhas":
                 except Exception as e:
                     st.error(f"Erro ao processar o arquivo: {e}")
 
-        # 🗑️ NOVO: EXCLUIR PLANILHA DE ESCALA IMPORTADA
+        # 🗑️ EXCLUIR PLANILHA DE ESCALA IMPORTADA
         if not st.session_state.get('escalas', pd.DataFrame()).empty:
             st.markdown("---")
             st.subheader("📋 Banco de Escalas Mensais")
