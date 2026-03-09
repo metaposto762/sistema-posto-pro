@@ -118,8 +118,6 @@ def carregar_dados():
         st.session_state['config'] = load_ws('config', ['Meta_Dia', 'Meta_Noite'])
         st.session_state['aniversarios'] = load_ws('aniversarios', ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
         st.session_state['log_acessos'] = load_ws('log_acessos', ['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])
-        
-        # ABA DE ESCALAS MENSAIS
         st.session_state['escalas'] = load_ws('escalas', ['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
         
         if st.session_state['config'].empty:
@@ -188,10 +186,8 @@ if not st.session_state['autenticado']:
                     else:
                         df_u = st.session_state.get('usuarios', pd.DataFrame())
                         if not df_u.empty:
-                            # Converte tudo para String para evitar erro com senhas numéricas!
                             df_u['Usuario'] = df_u['Usuario'].astype(str).str.strip()
                             df_u['Senha'] = df_u['Senha'].astype(str).str.strip()
-                            
                             busca = df_u[(df_u['Usuario'] == u) & (df_u['Senha'] == p) & (df_u['Status'] == 'Ativo')]
                             if not busca.empty:
                                 st.session_state['usuario_logado'] = busca.iloc[0]['Usuario']
@@ -204,15 +200,12 @@ if not st.session_state['autenticado']:
                             cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="login_p")
                             
                         st.session_state['autenticado'] = True
-                        
-                        # 📡 Grava o Dispositivo junto com o Histórico!
                         agora = (datetime.utcnow() - timedelta(hours=3)).strftime("%d/%m/%Y %H:%M:%S")
                         disp = get_device()
                         novo_log = pd.DataFrame([{'Data/Hora': agora, 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado'], 'Dispositivo': disp}])
                         
                         st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])), novo_log], ignore_index=True)
                         salvar_dados()
-                        
                         time.sleep(1.0)
                         st.rerun()
                     else:
@@ -232,35 +225,25 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
     vendas_mes = st.session_state['vendas'][st.session_state['vendas']['Mes'] == mes_sel]
     vendas_agrupadas = vendas_mes.groupby(['Nome', 'Mes'])[['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']].sum().reset_index()
     
-    # ---------------------------------------------------------
-    # MOTOR DE ESCALA: Verifica se tem escala importada pro mês
-    # ---------------------------------------------------------
     escala_do_mes = st.session_state.get('escalas', pd.DataFrame())
     if not escala_do_mes.empty and 'Mes' in escala_do_mes.columns:
         escala_do_mes = escala_do_mes[escala_do_mes['Mes'] == mes_sel]
         
     if not escala_do_mes.empty:
-        # Se tem escala, usa ela como base e puxa o Status do Cadastro Padrão
         df_base = escala_do_mes.copy()
         df_cadastro = st.session_state['equipe'][['Nome', 'Status', 'Cargo']].copy()
-        
         df_base = df_base.merge(df_cadastro, on='Nome', how='left')
         
-        # Se na escala veio cargo vazio, usa o cargo fixo do cadastro
         if 'Cargo_x' in df_base.columns:
             df_base['Cargo'] = df_base.apply(lambda r: r['Cargo_x'] if pd.notna(r['Cargo_x']) and str(r['Cargo_x']).strip() != "" else r['Cargo_y'], axis=1)
             df_base.drop(columns=['Cargo_x', 'Cargo_y'], inplace=True)
-            
         df_base['Status'] = df_base['Status'].fillna('Ativo')
     else:
-        # Se NÃO tem escala importada, usa o cadastro padrão
         df_base = st.session_state['equipe'].copy()
 
-    # Junta a base com as vendas
     df = pd.merge(df_base, vendas_agrupadas, on='Nome', how='left')
-    
-    # Filtra ativos ou quem teve venda
     tem_vendas_neste_mes = df['Nome'].isin(vendas_agrupadas['Nome'])
+    
     if 'Status' in df.columns:
         df = df[(df['Status'] == 'Ativo') | (tem_vendas_neste_mes)].copy()
     df.fillna(0, inplace=True)
@@ -270,15 +253,21 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
     if not df.empty:
         df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
         
+        # 🧠 NOVO CÉREBRO MATEMÁTICO DE HORAS
+        # Agora ele soma multiplos intervalos (Ex: 05h - 11h e 12h - 17h = 11h trabalhadas)
         def extrair_horas(t):
             matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
-            if len(matches) == 2:
-                h1, m1 = matches[0]; h2, m2 = matches[1]
-                t1 = int(h1)*60 + (int(m1) if m1 else 0)
-                t2 = int(h2)*60 + (int(m2) if m2 else 0)
-                if t2 <= t1: t2 += 24*60
-                return round((t2 - t1) / 60.0, 2)
-            return 0.0
+            total_horas = 0.0
+            if len(matches) >= 2:
+                # Pega de dupla em dupla (Início do turno - Saída pro almoço / Retorno - Saída final)
+                for i in range(0, len(matches)-1, 2):
+                    h1, m1 = matches[i]
+                    h2, m2 = matches[i+1]
+                    t1 = int(h1)*60 + (int(m1) if m1 else 0)
+                    t2 = int(h2)*60 + (int(m2) if m2 else 0)
+                    if t2 <= t1: t2 += 24*60 # Caso vire a noite
+                    total_horas += round((t2 - t1) / 60.0, 2)
+            return total_horas
 
         if 'Turno' in df.columns:
             df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
@@ -390,7 +379,7 @@ if 'empresas' not in st.session_state:
 
 with st.sidebar:
     st.title("⛽ AutoPosto Pro")
-    st.write(f"Usuário Logado: **{st.session_state['usuario_logado']}**")
+    st.write(f"Usuário: **{st.session_state['usuario_logado']}**")
     st.markdown("---")
     
     paginas = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
@@ -414,7 +403,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 10.0 | Automação Total")
+    st.caption("Versão 11.0 | Data Clean")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -702,7 +691,7 @@ elif menu == "🎂 Aniversariantes":
 # --- TELA: CADASTRO EMPRESA ---
 elif menu == "🏢 Cadastro Empresa":
     st.header("🏢 Gestão de Empresas")
-    aba_nova, aba_editar, aba_excluir = st.tabs(["🆕 Nova Empresa", "✏️ Editar Existente", "⛔ Inativar"])
+    aba_nova, aba_editar, aba_excluir = st.tabs(["🆕 Nova Empresa", "✏️ Editar Existente", "⛔ Desligar / 🗑️ Excluir"])
     
     with aba_nova:
         with st.container(border=True):
@@ -736,13 +725,22 @@ elif menu == "🏢 Cadastro Empresa":
     with aba_excluir:
         with st.container(border=True):
             if not st.session_state['empresas'].empty:
-                postos_ativos = st.session_state['empresas'][st.session_state['empresas']['Status'] == 'Ativo']['Posto']
-                emp_inativar = st.selectbox("Inativar Empresa", postos_ativos if not postos_ativos.empty else ["Nenhuma"])
-                if emp_inativar != "Nenhuma" and st.button("⛔ Inativar"):
+                emp_inativar = st.selectbox("Gerenciar Empresa", st.session_state['empresas']['Posto'])
+                col1, col2 = st.columns(2)
+                
+                if col1.button("⛔ Apenas Inativar", use_container_width=True):
                     idx = st.session_state['empresas'].index[st.session_state['empresas']['Posto'] == emp_inativar][0]
                     st.session_state['empresas'].at[idx, 'Status'] = 'Inativo'
                     salvar_dados()
                     st.success("✅ Empresa Inativada!")
+                    time.sleep(1)
+                    st.rerun()
+                    
+                if col2.button("🗑️ Excluir Definitivamente", type="primary", use_container_width=True):
+                    idx = st.session_state['empresas'].index[st.session_state['empresas']['Posto'] == emp_inativar][0]
+                    st.session_state['empresas'] = st.session_state['empresas'].drop(idx).reset_index(drop=True)
+                    salvar_dados()
+                    st.success("🗑️ Empresa Excluída!")
                     time.sleep(1)
                     st.rerun()
 
@@ -753,7 +751,7 @@ elif menu == "🏢 Cadastro Empresa":
 # --- TELA: CADASTRO TURNOS ---
 elif menu == "⏰ Cadastro Turnos":
     st.header("⏰ Gestão de Turnos e Horários")
-    aba_novo_t, aba_editar_t, aba_excluir_t = st.tabs(["🆕 Novo Turno", "✏️ Editar Turno", "⛔ Inativar Turno"])
+    aba_novo_t, aba_editar_t, aba_excluir_t = st.tabs(["🆕 Novo Turno", "✏️ Editar Turno", "⛔ Desligar / 🗑️ Excluir"])
 
     with aba_novo_t:
         with st.container(border=True):
@@ -787,13 +785,22 @@ elif menu == "⏰ Cadastro Turnos":
     with aba_excluir_t:
         with st.container(border=True):
             if not st.session_state['turnos'].empty:
-                turnos_ativos = st.session_state['turnos'][st.session_state['turnos']['Status'] == 'Ativo']['Turno']
-                turno_inativar = st.selectbox("Inativar Turno", turnos_ativos if not turnos_ativos.empty else ["Nenhum"])
-                if turno_inativar != "Nenhum" and st.button("⛔ Inativar"):
+                turno_inativar = st.selectbox("Gerenciar Turno", st.session_state['turnos']['Turno'])
+                col1, col2 = st.columns(2)
+                
+                if col1.button("⛔ Apenas Inativar", use_container_width=True):
                     idx = st.session_state['turnos'].index[st.session_state['turnos']['Turno'] == turno_inativar][0]
                     st.session_state['turnos'].at[idx, 'Status'] = 'Inativo'
                     salvar_dados()
                     st.success("✅ Turno Inativado!")
+                    time.sleep(1)
+                    st.rerun()
+                    
+                if col2.button("🗑️ Excluir Definitivamente", type="primary", use_container_width=True):
+                    idx = st.session_state['turnos'].index[st.session_state['turnos']['Turno'] == turno_inativar][0]
+                    st.session_state['turnos'] = st.session_state['turnos'].drop(idx).reset_index(drop=True)
+                    salvar_dados()
+                    st.success("🗑️ Turno Excluído!")
                     time.sleep(1)
                     st.rerun()
 
@@ -804,7 +811,7 @@ elif menu == "⏰ Cadastro Turnos":
 # --- TELA: CADASTRO COLABORADOR ---
 elif menu == "👤 Cadastro Colaborador":
     st.header("👤 Gestão de Colaboradores")
-    aba_lista, aba_novo, aba_editar, aba_desligar = st.tabs(["📋 Lista de Colaboradores", "🆕 Novo Cadastro", "✏️ Editar Existente", "⛔ Desligar"])
+    aba_lista, aba_novo, aba_editar, aba_desligar = st.tabs(["📋 Lista de Colaboradores", "🆕 Novo Cadastro", "✏️ Editar Existente", "⛔ Desligar / 🗑️ Excluir"])
 
     with aba_lista:
         if st.session_state['equipe'].empty: st.info("Nenhum colaborador cadastrado.")
@@ -859,20 +866,32 @@ elif menu == "👤 Cadastro Colaborador":
                         time.sleep(1)
                         st.rerun()
 
+    # 🗑️ NOVO: OPÇÃO DE EXCLUIR DEFINITIVO
     with aba_desligar:
         with st.container(border=True):
             if not st.session_state['equipe'].empty:
-                colabs_ativos = st.session_state['equipe'][st.session_state['equipe']['Status'] == 'Ativo']['Nome']
-                colab_inativar = st.selectbox("Desligar Colaborador", colabs_ativos if not colabs_ativos.empty else ["Nenhum"])
-                if colab_inativar != "Nenhum" and st.button("⛔ Inativar Colaborador"):
-                    idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_inativar][0]
-                    st.session_state['equipe'].at[idx, 'Status'] = 'Inativo'
-                    salvar_dados()
-                    st.success("✅ Colaborador desligado!")
-                    time.sleep(1)
-                    st.rerun()
+                colabs_lista = st.session_state['equipe']['Nome']
+                colab_acao = st.selectbox("Gerenciar Colaborador", colabs_lista if not colabs_lista.empty else ["Nenhum"])
+                
+                if colab_acao != "Nenhum":
+                    col1, col2 = st.columns(2)
+                    if col1.button("⛔ Apenas Inativar", use_container_width=True):
+                        idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_acao][0]
+                        st.session_state['equipe'].at[idx, 'Status'] = 'Inativo'
+                        salvar_dados()
+                        st.success("✅ Colaborador inativado! (Não aparecerá mais nos cálculos mensais, mas o histórico fica salvo).")
+                        time.sleep(1.5)
+                        st.rerun()
+                        
+                    if col2.button("🗑️ Excluir Definitivamente", type="primary", use_container_width=True):
+                        idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_acao][0]
+                        st.session_state['equipe'] = st.session_state['equipe'].drop(idx).reset_index(drop=True)
+                        salvar_dados()
+                        st.success("🗑️ Colaborador apagado do sistema para sempre!")
+                        time.sleep(1.5)
+                        st.rerun()
 
-# --- TELA: IMPORTAR PLANILHAS (COM AUTO-CADASTRO) ---
+# --- TELA: IMPORTAR PLANILHAS ---
 elif menu == "📈 Importar Planilhas":
     st.header("📈 Importação de Resultados e Escalas")
     
@@ -990,7 +1009,6 @@ elif menu == "📈 Importar Planilhas":
                 else:
                     st.info("Nenhum arquivo no histórico.")
 
-    # 🚀 O NOVO MOTOR DE AUTO-CADASTRO E LEITURA DE ESCALA 12x36
     with aba_escala:
         st.info("O sistema lê o seu **Relatório Visual 12x36** e, se achar um **Nome** ou **Turno** novo, ele cadastra sozinho no banco de dados!")
         
@@ -1012,7 +1030,6 @@ elif menu == "📈 Importar Planilhas":
                             col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
                             col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
                             
-                            # Detecta se a linha é de horário
                             if "H" in col0.upper() and col1 != "":
                                 cargo = "Frentista"
                                 if "CX DIA" in col0.upper(): cargo = "CX MANHÃ"
@@ -1020,7 +1037,6 @@ elif menu == "📈 Importar Planilhas":
                                 
                                 turno_limpo = col0.upper().replace("- CX DIA", "").replace("CX DIA", "").replace("- CX NOITE", "").replace("CX NOITE", "").strip()
                                 
-                                # Verifica dupla (Ímpar/Par)
                                 if "-" in col1 and "IMPAR" not in col1.upper():
                                     nomes = col1.split("-")
                                     if len(nomes) >= 2:
@@ -1030,7 +1046,6 @@ elif menu == "📈 Importar Planilhas":
                                         if nome_impar: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_impar, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
                                         if nome_par: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_par, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
                                 
-                                # Funcionário sozinho
                                 elif "IMPAR" not in col1.upper() and "-" not in col1:
                                     nome_unico = col1.strip().upper()
                                     if nome_unico.lower() not in ["nan", ""]:
@@ -1039,19 +1054,14 @@ elif menu == "📈 Importar Planilhas":
                     if novas_escalas:
                         df_nova_escala = pd.DataFrame(novas_escalas)
                         
-                        # 1. SALVA A ESCALA DO MÊS
                         if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
                         if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
                             st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_ref_escala]
                         st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
                         
-                        # ====================================================
-                        # 2. MOTOR DE AUTO-CADASTRO (TURNOS E COLABORADORES)
-                        # ====================================================
                         qtd_turnos_novos = 0
                         qtd_colabs_novos = 0
                         
-                        # A. Auto-Cadastro de Turnos
                         turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
                         turnos_na_planilha = df_nova_escala['Turno'].unique()
                         
@@ -1064,7 +1074,6 @@ elif menu == "📈 Importar Planilhas":
                         if novos_turnos_df:
                             st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
                             
-                        # B. Auto-Cadastro de Colaboradores
                         nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
                         nomes_processados_agora = set() 
                         novos_colabs_df = []
@@ -1085,7 +1094,6 @@ elif menu == "📈 Importar Planilhas":
                         if novos_colabs_df:
                             st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
 
-                        # Salva todas as abas no Google Sheets de uma vez
                         salvar_dados()
                         
                         mensagem_final = f"✅ Escala de {mes_ref_escala} importada! ({len(novas_escalas)} registros)."
@@ -1100,9 +1108,22 @@ elif menu == "📈 Importar Planilhas":
                 except Exception as e:
                     st.error(f"Erro ao processar o arquivo: {e}")
 
+        # 🗑️ NOVO: EXCLUIR PLANILHA DE ESCALA IMPORTADA
         if not st.session_state.get('escalas', pd.DataFrame()).empty:
             st.markdown("---")
             st.subheader("📋 Banco de Escalas Mensais")
+            
+            c_del1, c_del2 = st.columns([2, 1])
+            meses_salvos = sorted(st.session_state['escalas']['Mes'].unique(), reverse=True)
+            mes_excluir = c_del1.selectbox("Selecione o Mês para Excluir a Escala", meses_salvos)
+            
+            if c_del2.button("🗑️ Excluir Escala do Mês", type="primary", use_container_width=True):
+                st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_excluir]
+                salvar_dados()
+                st.success(f"🗑️ A escala de {mes_excluir} foi removida permanentemente!")
+                time.sleep(1.5)
+                st.rerun()
+                
             st.dataframe(st.session_state['escalas'].iloc[::-1], use_container_width=True, hide_index=True)
 
 # --- TELA: GESTÃO DE ACESSOS ---
@@ -1174,5 +1195,4 @@ elif menu == "🔐 Gestão de Acessos":
         if df_logs.empty:
             st.info("Nenhum acesso registrado ainda.")
         else:
-            # Exibe os últimos 50 logins do mais recente para o mais antigo
             st.dataframe(df_logs.tail(50).iloc[::-1], use_container_width=True, hide_index=True)
