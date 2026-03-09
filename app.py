@@ -161,7 +161,7 @@ def salvar_dados():
 # ==========================================
 cookie_manager = None
 if HAS_COOKIES:
-    @st.cache_resource(experimental_allow_widgets=True, show_spinner=False)
+    @st.cache_resource(show_spinner=False)
     def get_cookie_manager():
         return stx.CookieManager()
     cookie_manager = get_cookie_manager()
