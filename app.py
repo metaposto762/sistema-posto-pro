@@ -3,7 +3,7 @@ import pandas as pd
 import re
 import os
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- IMPORTAÇÕES DO GOOGLE SHEETS ---
 try:
@@ -114,6 +114,9 @@ def carregar_dados():
         
         st.session_state['aniversarios'] = load_ws('aniversarios', ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
         
+        # Carrega o histórico de Logins
+        st.session_state['log_acessos'] = load_ws('log_acessos', ['Data/Hora', 'Usuário', 'Perfil'])
+        
     except Exception as e:
         st.error(f"⚠️ Erro ao conectar com a Planilha do Google: {e}")
         st.stop()
@@ -141,12 +144,14 @@ def salvar_dados():
         save_ws('config', st.session_state['config'])
         save_ws('aniversarios', st.session_state['aniversarios'])
         save_ws('usuarios', st.session_state['usuarios'])
+        save_ws('log_acessos', st.session_state['log_acessos']) # Salva os logins
         
         log_df = pd.DataFrame(st.session_state['processados_list']) if st.session_state['processados_list'] else pd.DataFrame(columns=['id', 'Arquivo', 'Mês', 'Tipo'])
         save_ws('log', log_df)
     except Exception as e:
         st.error(f"🛑 Erro ao salvar os dados na nuvem: {e}")
         st.stop()
+
 
 # ==========================================
 # 🔐 SISTEMA DE LOGIN E SEGURANÇA
@@ -196,7 +201,17 @@ if not st.session_state['autenticado']:
                                 st.session_state['perfil_logado'] = busca.iloc[0]['Perfil']
                                 user_valido = True
                         
-                        if user_valido: st.rerun()
+                        if user_valido:
+                            # 🚨 REGISTRA O LOGIN NA CÂMERA DE SEGURANÇA
+                            agora = datetime.utcnow() - timedelta(hours=3) # Ajusta para fuso do Brasil
+                            novo_log = pd.DataFrame([{
+                                'Data/Hora': agora.strftime("%d/%m/%Y %H:%M:%S"), 
+                                'Usuário': st.session_state['usuario_logado'], 
+                                'Perfil': st.session_state['perfil_logado']
+                            }])
+                            st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil'])), novo_log], ignore_index=True)
+                            salvar_dados() # Salva a informação na hora no Google
+                            st.rerun()
                         else: st.error("❌ Usuário ou senha incorretos ou inativos!")
     st.stop() 
 
@@ -298,6 +313,13 @@ with st.sidebar:
     menu = st.radio("Navegação do Sistema", opcoes_menu)
     st.markdown("---")
     
+    # BOTÃO NATIVO DE ATUALIZAR DADOS (Substitui o uso do F5)
+    if st.button("🔄 Atualizar Dados do Google", use_container_width=True, help="Clique aqui para atualizar as informações sem deslogar"):
+        with st.spinner("Buscando dados no Google..."):
+            carregar_dados()
+        st.success("Dados Atualizados!")
+        st.rerun()
+
     if st.button("🚪 Sair do Sistema", use_container_width=True):
         st.session_state['autenticado'] = False
         st.session_state['usuario_logado'] = ""
@@ -305,7 +327,7 @@ with st.sidebar:
         st.rerun()
         
     st.markdown("---")
-    st.caption("Versão 6.1 | Multi-Usuários")
+    st.caption("Versão 6.2 | Auditoria & Sync")
 
 # ==========================================
 # FUNÇÃO DE CÁLCULO GERAL
@@ -368,9 +390,9 @@ def cor_style(val): return 'color: #10b981; font-weight: bold;' if val >= 0.90 e
 # ==========================================
 if menu == "🔐 Gestão de Acessos":
     st.header("🔐 Gestão de Usuários")
-    st.markdown("Crie usuários para a sua equipe acessar o sistema sem precisar compartilhar a sua senha principal.")
+    st.markdown("Crie usuários e acompanhe o histórico de acessos da sua equipe.")
     
-    aba_novo_u, aba_editar_u = st.tabs(["🆕 Novo Usuário", "📋 Editar / Inativar"])
+    aba_novo_u, aba_editar_u, aba_historico = st.tabs(["🆕 Novo Usuário", "📋 Editar / Inativar", "🕵️ Histórico de Logins"])
     
     with aba_novo_u:
         with st.container(border=True):
@@ -423,6 +445,16 @@ if menu == "🔐 Gestão de Acessos":
             
             st.subheader("Usuários Cadastrados")
             st.dataframe(st.session_state['usuarios'][['Usuario', 'Perfil', 'Status']], use_container_width=True, hide_index=True)
+
+    with aba_historico:
+        st.subheader("Últimos Acessos ao Sistema")
+        df_logs = st.session_state.get('log_acessos', pd.DataFrame())
+        if df_logs.empty:
+            st.info("Nenhum acesso registrado ainda. Os próximos logins aparecerão aqui.")
+        else:
+            # Mostra os registros mais recentes primeiro (inverte a ordem da tabela)
+            st.dataframe(df_logs.iloc[::-1], use_container_width=True, hide_index=True)
+
 
 # ==========================================
 # TELAS DE CADASTRO
