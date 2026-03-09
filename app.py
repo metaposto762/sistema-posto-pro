@@ -413,7 +413,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 13.0 | Mente Brilhante")
+    st.caption("Versão 13.1 | Mente Brilhante")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -840,7 +840,7 @@ elif menu == "👤 Cadastro Colaborador":
                         nome_f = st.text_input("Nome Completo*").upper()
                     with col2:
                         turno_f = st.selectbox("Turno", turnos_ativos) 
-                        cargo_f = st.selectbox("Cargo", ["Frentista", "CX MANHÃ", "CX NOITE", "Gerente", "Chefe de Pista"])
+                        cargo_f = st.selectbox("Cargo", ["Frentista", "CX MANHÃ", "CX NOITE", "Gerente", "Chefe de Pista", "Diarista/Mensalista"])
                     if st.form_submit_button("Salvar Colaborador", type="primary") and nome_f:
                         st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame([{'Posto': posto_f, 'Turno': turno_f, 'Cargo': cargo_f, 'Nome': nome_f, 'Status': 'Ativo'}])], ignore_index=True)
                         salvar_dados()
@@ -851,7 +851,9 @@ elif menu == "👤 Cadastro Colaborador":
     with aba_editar:
         with st.container(border=True):
             if not st.session_state['equipe'].empty:
-                colab_para_editar = st.selectbox("Selecione o Colaborador", st.session_state['equipe']['Nome'])
+                colabs_lista_ed = sorted(st.session_state['equipe']['Nome'].astype(str).unique().tolist())
+                colab_para_editar = st.selectbox("Selecione o Colaborador para Editar", colabs_lista_ed)
+                
                 dados_atuais = st.session_state['equipe'][st.session_state['equipe']['Nome'] == colab_para_editar].iloc[0]
                 with st.form("form_edicao"):
                     col1, col2 = st.columns(2)
@@ -862,7 +864,7 @@ elif menu == "👤 Cadastro Colaborador":
                     with col2:
                         lista_turnos = list(st.session_state['turnos']['Turno'])
                         novo_turno_e = st.selectbox("Turno", lista_turnos, index=lista_turnos.index(dados_atuais['Turno']) if dados_atuais['Turno'] in lista_turnos else 0)
-                        lista_cargos = ["Frentista", "CX MANHÃ", "CX NOITE", "Gerente", "Chefe de Pista"]
+                        lista_cargos = ["Frentista", "CX MANHÃ", "CX NOITE", "Gerente", "Chefe de Pista", "Diarista/Mensalista"]
                         novo_cargo_e = st.selectbox("Cargo", lista_cargos, index=lista_cargos.index(dados_atuais['Cargo']) if dados_atuais['Cargo'] in lista_cargos else 0)
                     if st.form_submit_button("Atualizar Informações"):
                         idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_para_editar][0]
@@ -879,8 +881,8 @@ elif menu == "👤 Cadastro Colaborador":
     with aba_desligar:
         with st.container(border=True):
             if not st.session_state['equipe'].empty:
-                colabs_lista = st.session_state['equipe']['Nome']
-                colab_acao = st.selectbox("Gerenciar Colaborador", colabs_lista if not colabs_lista.empty else ["Nenhum"])
+                colabs_lista_del = sorted(st.session_state['equipe']['Nome'].astype(str).unique().tolist())
+                colab_acao = st.selectbox("Selecione o Colaborador para Excluir/Desligar", colabs_lista_del if colabs_lista_del else ["Nenhum"])
                 
                 if colab_acao != "Nenhum":
                     col1, col2 = st.columns(2)
@@ -1046,7 +1048,6 @@ elif menu == "📈 Importar Planilhas":
                         posto_atual = None
                         mes_final = mes_ref_escala
                         
-                        # 🧠 DETECTOR INTELIGENTE DE MÊS
                         if "Auto-Detectar" in mes_ref_escala:
                             m_file = re.search(r'(0[1-9]|1[0-2])[-_](20[2-3][0-9])', arq_escala.name)
                             if m_file:
@@ -1181,7 +1182,6 @@ elif menu == "📈 Importar Planilhas":
                 except Exception as e:
                     st.error(f"Erro ao processar o arquivo: {e}")
 
-        # 🗑️ EXCLUIR PLANILHA DE ESCALA IMPORTADA
         if not st.session_state.get('escalas', pd.DataFrame()).empty:
             st.markdown("---")
             st.subheader("📋 Banco de Escalas Mensais")
