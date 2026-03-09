@@ -161,10 +161,7 @@ def salvar_dados():
 # ==========================================
 cookie_manager = None
 if HAS_COOKIES:
-    @st.cache_resource(show_spinner=False)
-    def get_cookie_manager():
-        return stx.CookieManager()
-    cookie_manager = get_cookie_manager()
+    cookie_manager = stx.CookieManager(key="cookies_posto")
 
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
