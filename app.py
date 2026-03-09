@@ -5,6 +5,7 @@ import os
 import io
 import time
 from datetime import datetime, timedelta
+import streamlit.components.v1 as components # IMPORTAÇÃO NOVA PARA BLINDAR OS COOKIES!
 
 # --- IMPORTAÇÕES DE SEGURANÇA E BANCO ---
 try:
@@ -47,7 +48,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 🔐 GESTÃO DE SESSÃO E COOKIES (ANTI-F5)
+# 🔐 GESTÃO DE SESSÃO E COOKIES (ANTI-F5 BLINDADO)
 # ==========================================
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
@@ -58,6 +59,13 @@ cookie_manager = None
 if HAS_LIBS:
     cookie_manager = stx.CookieManager(key="mestre_posto_v5")
 
+# 🚨 SISTEMA DE DESCONEXÃO SEGURA 🚨
+if st.session_state.get('sair_solicitado', False):
+    st.session_state.clear()
+    st.session_state['ignorar_cookie'] = True
+    st.rerun()
+
+# Recuperador de Sessão (Login Automático)
 if not st.session_state['autenticado'] and cookie_manager is not None:
     if not st.session_state.get('ignorar_cookie', False):
         cookies = cookie_manager.get_all()
@@ -385,7 +393,6 @@ with st.sidebar:
     st.write(f"Usuário Logado: **{st.session_state['usuario_logado']}**")
     st.markdown("---")
     
-    # 🚀 ADICIONADO O MENU ESCALA MENSAL SEPARADO!
     paginas = ["📊 Painel Geral", "💰 Bonificação", "📅 Escala Mensal", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
     if st.session_state['perfil_logado'] == "Admin": paginas.append("🔐 Gestão de Acessos")
     menu = st.radio("Navegação do Sistema", paginas)
@@ -398,16 +405,29 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
         
+    # 🚨 BOTÃO DE SAIR COM PURGA DE COOKIES E REFRESH FORÇADO
     if st.button("🚪 Sair do Sistema", type="secondary", use_container_width=True):
+        st.session_state['sair_solicitado'] = True
         if cookie_manager is not None:
-            cookie_manager.set("user_posto", "", max_age=0, key="logout_u")
-            cookie_manager.set("perfil_posto", "", max_age=0, key="logout_p")
-            time.sleep(0.5)
-        st.session_state.clear()
-        st.session_state['ignorar_cookie'] = True 
-        st.rerun()
+            cookie_manager.delete("user_posto")
+            cookie_manager.delete("perfil_posto")
+            st.success("Desconectando de forma segura... 🔒")
+            
+            # Injeta código invisível para forçar a exclusão no navegador e atualizar a página
+            components.html("""
+                <script>
+                    setTimeout(function() {
+                        document.cookie = "user_posto=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+                        document.cookie = "perfil_posto=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+                        window.parent.location.reload();
+                    }, 1200);
+                </script>
+            """, height=0)
+        else:
+            st.rerun()
+
     st.markdown("---")
-    st.caption("Versão 14.0 | Escala Master")
+    st.caption("Versão 15.0 | Anti-Ghost Session")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -576,7 +596,7 @@ elif menu == "💰 Bonificação":
     else:
         st.info("Nenhum colaborador ativo.")
 
-# --- NOVO MENU: TELA ESCALA MENSAL DEDICADA ---
+# --- TELA: ESCALA MENSAL ---
 elif menu == "📅 Escala Mensal":
     st.header("📅 Gestão de Escala Mensal (12x36)")
     st.info("O sistema lê o seu **Relatório Visual 12x36**, detecta a **Empresa e o Mês**, e auto-cadastra Empresa, Nomes e Turnos!")
@@ -669,74 +689,72 @@ elif menu == "📅 Escala Mensal":
                                     if nome_unico not in ["NAN", ""]:
                                         novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
                                 
-                if novas_escalas:
-                    df_nova_escala = pd.DataFrame(novas_escalas)
-                    
-                    if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
-                    if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
-                        st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
-                    st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
-                    
-                    qtd_postos_novos = 0
-                    qtd_turnos_novos = 0
-                    qtd_colabs_novos = 0
-                    
-                    postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
-                    postos_na_planilha = df_nova_escala['Posto'].unique()
-                    
-                    novas_empresas_df = []
-                    for p in postos_na_planilha:
-                        if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
-                            novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'})
-                            qtd_postos_novos += 1
-                            
-                    if novas_empresas_df:
-                        st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
-
-                    turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
-                    turnos_na_planilha = df_nova_escala['Turno'].unique()
-                    
-                    novos_turnos_df = []
-                    for t in turnos_na_planilha:
-                        if t not in turnos_existentes:
-                            novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'})
-                            qtd_turnos_novos += 1
-                            
-                    if novos_turnos_df:
-                        st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
+            if novas_escalas:
+                df_nova_escala = pd.DataFrame(novas_escalas)
+                
+                if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
+                if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
+                    st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
+                st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
+                
+                qtd_postos_novos = 0
+                qtd_turnos_novos = 0
+                qtd_colabs_novos = 0
+                
+                postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
+                postos_na_planilha = df_nova_escala['Posto'].unique()
+                
+                novas_empresas_df = []
+                for p in postos_na_planilha:
+                    if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
+                        novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'})
+                        qtd_postos_novos += 1
                         
-                    nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
-                    nomes_processados_agora = set() 
-                    novos_colabs_df = []
-                    
-                    for _, row in df_nova_escala.iterrows():
-                        nome_val = row['Nome']
-                        if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
-                            novos_colabs_df.append({
-                                'Posto': row['Posto'],
-                                'Turno': row['Turno'],
-                                'Cargo': row['Cargo'],
-                                'Nome': nome_val,
-                                'Status': 'Ativo'
-                            })
-                            nomes_processados_agora.add(nome_val)
-                            qtd_colabs_novos += 1
-                            
-                    if novos_colabs_df:
-                        st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
+                if novas_empresas_df:
+                    st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
 
-                    salvar_dados()
+                turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
+                turnos_na_planilha = df_nova_escala['Turno'].unique()
+                
+                novos_turnos_df = []
+                for t in turnos_na_planilha:
+                    if t not in turnos_existentes:
+                        novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'})
+                        qtd_turnos_novos += 1
+                        
+                if novos_turnos_df:
+                    st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
                     
-                    mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
-                    if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
-                    if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
-                    if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
-                    
-                    st.success(mensagem_final)
-                    time.sleep(3) 
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Não encontrei o padrão de horários e nomes na planilha. Revise o arquivo.")
+                nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
+                nomes_processados_agora = set() 
+                novos_colabs_df = []
+                
+                for _, row in df_nova_escala.iterrows():
+                    nome_val = row['Nome']
+                    if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
+                        novos_colabs_df.append({
+                            'Posto': row['Posto'],
+                            'Turno': row['Turno'],
+                            'Cargo': row['Cargo'],
+                            'Nome': nome_val,
+                            'Status': 'Ativo'
+                        })
+                        nomes_processados_agora.add(nome_val)
+                        qtd_colabs_novos += 1
+                        
+                if novos_colabs_df:
+                    st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
+
+                salvar_dados()
+                
+                mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
+                if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
+                if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
+                if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
+                
+                st.success(mensagem_final)
+                time.sleep(3) 
+                st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar o arquivo: {e}")
 
