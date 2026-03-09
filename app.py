@@ -107,14 +107,13 @@ def carregar_dados():
         client = get_gsheets_client()
         doc = client.open_by_key(PLANILHA_ID)
         
-        # OTIMIZAÇÃO: Puxa nomes de todas as abas 1 vez só
         todas_abas = {ws.title: ws for ws in doc.worksheets()}
         
         def load_ws(name, cols):
             try:
                 if name in todas_abas:
                     data = todas_abas[name].get_all_records()
-                    time.sleep(0.3) # Evita rajada no servidor
+                    time.sleep(0.3) 
                     return pd.DataFrame(data) if data else pd.DataFrame(columns=cols)
                 else:
                     return pd.DataFrame(columns=cols)
@@ -141,7 +140,6 @@ def carregar_dados():
     except Exception as e:
         st.error(f"Erro de Conexão Google: Aguarde um minuto, o limite de segurança da API foi atingido. ({e})")
 
-# 🚀 NOVO SALVAMENTO INTELIGENTE (Só salva a planilha que foi modificada)
 def salvar_dados(abas_para_salvar=None):
     try:
         client = get_gsheets_client()
@@ -155,17 +153,16 @@ def salvar_dados(abas_para_salvar=None):
                 else:
                     ws = doc.add_worksheet(title=name, rows="1000", cols="20")
                     todas_abas[name] = ws
-                    time.sleep(1) # Espera Google criar a aba
+                    time.sleep(1)
                 
                 ws.clear()
                 df_clean = df.fillna("").astype(str)
                 dados = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
                 ws.update(values=dados, range_name='A1')
-                time.sleep(0.5) # Respiro pra API
+                time.sleep(0.5) 
             except Exception as e: 
                 print(f"Erro ao salvar aba {name}: {e}")
 
-        # Se não falar qual aba, salva tudo (fallback de segurança)
         if abas_para_salvar is None:
             abas_para_salvar = ['empresas', 'turnos', 'equipe', 'vendas', 'config', 'aniversarios', 'usuarios', 'log_acessos', 'escalas', 'log']
             
@@ -232,8 +229,6 @@ if not st.session_state['autenticado']:
                         novo_log = pd.DataFrame([{'Data/Hora': agora, 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado'], 'Dispositivo': disp}])
                         
                         st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])), novo_log], ignore_index=True)
-                        
-                        # Salva SOMENTE o log de acesso (Super rápido)
                         salvar_dados(['log_acessos'])
                         time.sleep(1.0)
                         st.rerun()
@@ -405,7 +400,6 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
         
-    # 🚨 BOTÃO DE SAIR COM KEYS EXCLUSIVAS (Anti-Erro)
     if st.button("🚪 Sair do Sistema", type="secondary", use_container_width=True):
         st.session_state['sair_solicitado'] = True
         if cookie_manager is not None:
@@ -425,7 +419,7 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.caption("Versão 16.2 | Logout Blindado 🔒")
+    st.caption("Versão 16.3 | Código Limpo e Estável 🚀")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -649,49 +643,52 @@ elif menu == "📅 Escala Mensal":
                                     nome_unico = col1_up.strip()
                                     if nome_unico not in ["NAN", ""]: novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
                                 
-            if novas_escalas:
-                df_nova_escala = pd.DataFrame(novas_escalas)
-                if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
-                if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
-                    st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
-                st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
-                
-                qtd_postos_novos, qtd_turnos_novos, qtd_colabs_novos = 0, 0, 0
-                
-                postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
-                novas_empresas_df = []
-                for p in df_nova_escala['Posto'].unique():
-                    if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
-                        novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'}); qtd_postos_novos += 1
-                if novas_empresas_df: st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
-
-                turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
-                novos_turnos_df = []
-                for t in df_nova_escala['Turno'].unique():
-                    if t not in turnos_existentes:
-                        novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'}); qtd_turnos_novos += 1
-                if novos_turnos_df: st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
+                if novas_escalas:
+                    df_nova_escala = pd.DataFrame(novas_escalas)
+                    if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
+                    if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
+                        st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_final]
+                    st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
                     
-                nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
-                nomes_processados_agora = set() 
-                novos_colabs_df = []
-                for _, row in df_nova_escala.iterrows():
-                    nome_val = row['Nome']
-                    if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
-                        novos_colabs_df.append({'Posto': row['Posto'], 'Turno': row['Turno'], 'Cargo': row['Cargo'], 'Nome': nome_val, 'Status': 'Ativo'})
-                        nomes_processados_agora.add(nome_val); qtd_colabs_novos += 1
-                if novos_colabs_df: st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
+                    qtd_postos_novos, qtd_turnos_novos, qtd_colabs_novos = 0, 0, 0
+                    
+                    postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
+                    novas_empresas_df = []
+                    for p in df_nova_escala['Posto'].unique():
+                        if p and p != "POSTO NÃO IDENTIFICADO" and p not in postos_existentes:
+                            novas_empresas_df.append({'Posto': p, 'Status': 'Ativo'}); qtd_postos_novos += 1
+                    if novas_empresas_df: st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
 
-                salvar_dados(['escalas', 'empresas', 'turnos', 'equipe'])
-                
-                mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
-                if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
-                if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
-                if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
-                st.success(mensagem_final)
-                time.sleep(3) 
-                st.rerun()
-            except Exception as e: st.error(f"Erro ao processar o arquivo: {e}")
+                    turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
+                    novos_turnos_df = []
+                    for t in df_nova_escala['Turno'].unique():
+                        if t not in turnos_existentes:
+                            novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'}); qtd_turnos_novos += 1
+                    if novos_turnos_df: st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
+                        
+                    nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
+                    nomes_processados_agora = set() 
+                    novos_colabs_df = []
+                    for _, row in df_nova_escala.iterrows():
+                        nome_val = row['Nome']
+                        if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
+                            novos_colabs_df.append({'Posto': row['Posto'], 'Turno': row['Turno'], 'Cargo': row['Cargo'], 'Nome': nome_val, 'Status': 'Ativo'})
+                            nomes_processados_agora.add(nome_val); qtd_colabs_novos += 1
+                    if novos_colabs_df: st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
+
+                    salvar_dados(['escalas', 'empresas', 'turnos', 'equipe'])
+                    
+                    mensagem_final = f"✅ Escala de {mes_final} importada! ({len(novas_escalas)} registros)."
+                    if qtd_postos_novos > 0: mensagem_final += f" 🏢 {qtd_postos_novos} empresas novas."
+                    if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} turnos novos."
+                    if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} colab. novos."
+                    st.success(mensagem_final)
+                    time.sleep(3) 
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Não encontrei o padrão de horários e nomes na planilha. Revise o arquivo.")
+            except Exception as e:
+                st.error(f"Erro ao processar o arquivo: {e}")
 
     if not st.session_state.get('escalas', pd.DataFrame()).empty:
         st.markdown("---")
@@ -702,7 +699,7 @@ elif menu == "📅 Escala Mensal":
         
         if c_del2.button("🗑️ Excluir Escala do Mês", type="primary", use_container_width=True):
             st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_excluir]
-            salvar_dados(['escalas'])
+            salvar_dados(['escalas']) 
             st.success(f"🗑️ A escala de {mes_excluir} foi removida!")
             time.sleep(1.5)
             st.rerun()
