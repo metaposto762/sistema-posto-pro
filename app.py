@@ -3,144 +3,128 @@ import pandas as pd
 import re
 import os
 import io
-import time 
+import time
 from datetime import datetime, timedelta
 
-# --- IMPORTAÇÕES DO GOOGLE SHEETS ---
+# --- IMPORTAÇÕES DE SEGURANÇA E BANCO ---
 try:
     import gspread
     from google.oauth2.service_account import Credentials
-    HAS_GSPREAD = True
+    import extra_streamlit_components as stx
+    HAS_LIBS = True
 except ImportError:
-    HAS_GSPREAD = False
+    HAS_LIBS = False
 
-# --- IMPORTAÇÕES DO GERADOR DE PDF ---
 try:
     from reportlab.lib.pagesizes import landscape, A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    HAS_REPORTLAB = True
+    HAS_PDF = True
 except ImportError:
-    HAS_REPORTLAB = False
-
-# --- IMPORTAÇÕES DE COOKIES (MANTER LOGADO) ---
-try:
-    import extra_streamlit_components as stx
-    HAS_COOKIES = True
-except ImportError:
-    HAS_COOKIES = False
+    HAS_PDF = False
 
 # ==========================================
-# 🛑 PUXANDO O ID DA PLANILHA DO COFRE SECRETO:
+# 🛑 CONFIGURAÇÕES INICIAIS
 # ==========================================
-try:
-    PLANILHA_ID = st.secrets["PLANILHA_ID"]
-except KeyError:
-    PLANILHA_ID = "" # Prevenção de erro caso esqueça de colocar no Streamlit
-
-# --- Configuração da Página ---
 st.set_page_config(page_title="AutoPosto Pro", page_icon="⛽", layout="wide", initial_sidebar_state="expanded")
 
+try:
+    PLANILHA_ID = st.secrets["PLANILHA_ID"]
+except:
+    st.error("❌ PLANILHA_ID não encontrado nos Secrets do Streamlit!")
+    st.stop()
+
 # ==========================================
-# INJEÇÃO DE CSS
+# INJEÇÃO DE CSS (Visual Profissional)
 # ==========================================
 st.markdown("""
 <style>
-    [data-testid="metric-container"] { padding: 1.2rem 1.5rem !important; border-radius: 12px !important; border: 1px solid rgba(128, 128, 128, 0.2) !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important; transition: transform 0.2s ease, box-shadow 0.2s ease !important; }
-    [data-testid="metric-container"]:hover { transform: translateY(-4px) !important; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2) !important; }
-    [data-testid="stMetricLabel"] p { font-weight: 600 !important; font-size: 1.05rem !important; }
-    [data-testid="stMetricValue"] { font-weight: 800 !important; }
-    div[data-testid="stVerticalBlock"] > div > div > div > div:nth-child(1) [data-testid="metric-container"] { border-left: 5px solid #3b82f6 !important; } 
-    div[data-testid="stVerticalBlock"] > div > div > div > div:nth-child(2) [data-testid="metric-container"] { border-left: 5px solid #10b981 !important; } 
-    div[data-testid="stVerticalBlock"] > div > div > div > div:nth-child(3) [data-testid="metric-container"] { border-left: 5px solid #f59e0b !important; } 
-    div[data-testid="stVerticalBlock"] > div > div > div > div:nth-child(4) [data-testid="metric-container"] { border-left: 5px solid #ef4444 !important; } 
-    div[data-testid="stVerticalBlock"] > div[style*="border"] { border-radius: 12px !important; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1) !important; padding: 1.5rem !important; margin-bottom: 1rem !important; }
-    @media (max-width: 768px) {
-        div[data-testid="stVerticalBlock"] > div[style*="border"] { padding: 1rem 0.8rem !important; }
-        [data-testid="metric-container"] { padding: 0.8rem 1rem !important; }
-        [data-testid="stMetricValue"] { font-size: 1.4rem !important; }
-        [data-testid="stMetricLabel"] p { font-size: 0.9rem !important; }
-        h1 { font-size: 1.6rem !important; } h2 { font-size: 1.3rem !important; } h3 { font-size: 1.1rem !important; }
-    }
+    [data-testid="metric-container"] { padding: 1.2rem !important; border-radius: 12px !important; border: 1px solid rgba(128, 128, 128, 0.2) !important; box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important; }
+    [data-testid="stMetricValue"] { font-weight: 800 !important; color: #1e293b; }
+    .stButton>button { border-radius: 8px !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# MOTOR DE BANCO DE DADOS (GOOGLE SHEETS)
+# 🔐 GESTÃO DE SESSÃO E COOKIES (ANTI-F5)
+# ==========================================
+if 'autenticado' not in st.session_state:
+    st.session_state['autenticado'] = False
+    st.session_state['usuario_logado'] = ""
+    st.session_state['perfil_logado'] = ""
+
+cookie_manager = None
+if HAS_LIBS:
+    cookie_manager = stx.CookieManager(key="mestre_posto_v4")
+
+# Recuperação Automática Segura (Sem usar loop para evitar erro de duplicação)
+if not st.session_state['autenticado'] and cookie_manager is not None:
+    if not st.session_state.get('ignorar_cookie', False):
+        cookies = cookie_manager.get_all()
+        if isinstance(cookies, dict) and "user_posto" in cookies and cookies["user_posto"] != "":
+            st.session_state['autenticado'] = True
+            st.session_state['usuario_logado'] = str(cookies["user_posto"])
+            st.session_state['perfil_logado'] = str(cookies.get("perfil_posto", "Operador"))
+            st.rerun()
+        elif 'tentou_recuperar' not in st.session_state:
+            # O navegador demora a responder? Dá um freio de meio segundo e recarrega 1 única vez.
+            st.session_state['tentou_recuperar'] = True
+            time.sleep(0.5)
+            st.rerun()
+
+# ==========================================
+# 📊 MOTOR DO GOOGLE SHEETS
 # ==========================================
 @st.cache_resource
 def get_gsheets_client():
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    if os.path.exists('credenciais.json'):
-        creds = Credentials.from_service_account_file('credenciais.json', scopes=scope)
-    else:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     return gspread.authorize(creds)
 
 def carregar_dados():
-    if not HAS_GSPREAD:
-        st.error("⚠️ Biblioteca do Google Sheets não instalada! Rode: pip install gspread google-auth")
-        st.stop()
-        
     try:
         client = get_gsheets_client()
         doc = client.open_by_key(PLANILHA_ID)
         
-        def load_ws(name, default_cols):
+        def load_ws(name, cols):
             try:
                 ws = doc.worksheet(name)
                 data = ws.get_all_records()
-                if data: return pd.DataFrame(data)
-                else: return pd.DataFrame(columns=default_cols)
-            except Exception:
-                return pd.DataFrame(columns=default_cols)
+                return pd.DataFrame(data) if data else pd.DataFrame(columns=cols)
+            except: return pd.DataFrame(columns=cols)
 
         st.session_state['empresas'] = load_ws('empresas', ['Posto', 'Status'])
         st.session_state['turnos'] = load_ws('turnos', ['Turno', 'Status'])
         st.session_state['equipe'] = load_ws('equipe', ['Posto', 'Turno', 'Cargo', 'Nome', 'Status'])
-        
-        df_usr = load_ws('usuarios', ['Usuario', 'Senha', 'Perfil', 'Status'])
-        df_usr['Usuario'] = df_usr['Usuario'].astype(str).str.strip()
-        df_usr['Senha'] = df_usr['Senha'].astype(str).str.strip()
-        st.session_state['usuarios'] = df_usr
-        
-        df_vendas = load_ws('vendas', ['Arquivo', 'Nome', 'Mes', 'Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL'])
-        for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
-            if col in df_vendas.columns:
-                df_vendas[col] = pd.to_numeric(df_vendas[col], errors='coerce').fillna(0.0)
-        st.session_state['vendas'] = df_vendas
-        
-        log_df = load_ws('log', ['id', 'Arquivo', 'Mês', 'Tipo'])
-        st.session_state['processados_list'] = log_df.to_dict('records')
-        
-        config_df = load_ws('config', ['Meta_Dia', 'Meta_Noite'])
-        if config_df.empty: st.session_state['config'] = pd.DataFrame({'Meta_Dia': [19.63], 'Meta_Noite': [15.00]})
-        else: st.session_state['config'] = config_df
-        
+        st.session_state['usuarios'] = load_ws('usuarios', ['Usuario', 'Senha', 'Perfil', 'Status'])
+        st.session_state['vendas'] = load_ws('vendas', ['Arquivo', 'Nome', 'Mes', 'Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL'])
+        st.session_state['processados_list'] = load_ws('log', ['id', 'Arquivo', 'Mês', 'Tipo']).to_dict('records')
+        st.session_state['config'] = load_ws('config', ['Meta_Dia', 'Meta_Noite'])
         st.session_state['aniversarios'] = load_ws('aniversarios', ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
-        
         st.session_state['log_acessos'] = load_ws('log_acessos', ['Data/Hora', 'Usuário', 'Perfil'])
         
+        if st.session_state['config'].empty:
+            st.session_state['config'] = pd.DataFrame({'Meta_Dia': [19.63], 'Meta_Noite': [15.00]})
+            
+        # Converte colunas numéricas de vendas
+        for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
+            st.session_state['vendas'][col] = pd.to_numeric(st.session_state['vendas'][col], errors='coerce').fillna(0)
+            
     except Exception as e:
-        st.error(f"⚠️ Erro ao conectar com a Planilha do Google: {e}")
-        st.stop()
+        st.error(f"Erro de Conexão Google: {e}")
 
 def salvar_dados():
-    if not HAS_GSPREAD: return
     try:
         client = get_gsheets_client()
         doc = client.open_by_key(PLANILHA_ID)
-        
         def save_ws(name, df):
             try: ws = doc.worksheet(name)
-            except gspread.exceptions.WorksheetNotFound: ws = doc.add_worksheet(title=name, rows="1000", cols="20")
+            except: ws = doc.add_worksheet(title=name, rows="1000", cols="20")
             ws.clear()
             df_clean = df.fillna("").astype(str)
             dados = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
-            try: ws.update(values=dados, range_name='A1')
-            except TypeError: ws.update('A1', dados)
+            ws.update(values=dados, range_name='A1')
             
         save_ws('empresas', st.session_state['empresas'])
         save_ws('turnos', st.session_state['turnos'])
@@ -150,103 +134,114 @@ def salvar_dados():
         save_ws('aniversarios', st.session_state['aniversarios'])
         save_ws('usuarios', st.session_state['usuarios'])
         save_ws('log_acessos', st.session_state['log_acessos'])
-        
-        log_df = pd.DataFrame(st.session_state['processados_list']) if st.session_state['processados_list'] else pd.DataFrame(columns=['id', 'Arquivo', 'Mês', 'Tipo'])
-        save_ws('log', log_df)
+        save_ws('log', pd.DataFrame(st.session_state['processados_list']))
     except Exception as e:
-        st.error(f"🛑 Erro ao salvar os dados na nuvem: {e}")
-        st.stop()
+        st.error(f"Erro ao salvar dados: {e}")
 
 # ==========================================
-# 🔐 GERENCIADOR DE COOKIES E LOGIN (BLINDADO)
+# 🔓 TELA DE LOGIN
 # ==========================================
-cookie_manager = None
-if HAS_COOKIES:
-    cookie_manager = stx.CookieManager(key="cookies_posto")
-
-if 'autenticado' not in st.session_state:
-    st.session_state['autenticado'] = False
-    st.session_state['usuario_logado'] = ""
-    st.session_state['perfil_logado'] = ""
-
-# 🔄 LOOP DE RECUPERAÇÃO DE SESSÃO (Vence a lentidão do navegador no F5)
-if not st.session_state['autenticado'] and cookie_manager is not None:
-    if st.session_state.get('ignorar_cookie_temporario', False):
-        pass # Se clicou em SAIR, ignora a memória fantasma
-    else:
-        for _ in range(3): # Tenta ler 3 vezes
-            cookies_salvos = cookie_manager.get_all()
-            if isinstance(cookies_salvos, dict) and "user_posto" in cookies_salvos and cookies_salvos["user_posto"]:
-                st.session_state['autenticado'] = True
-                st.session_state['usuario_logado'] = str(cookies_salvos["user_posto"])
-                st.session_state['perfil_logado'] = str(cookies_salvos.get("perfil_posto", "Operador"))
-                st.rerun()
-            time.sleep(0.3)
-
 if not st.session_state['autenticado']:
-    if not HAS_COOKIES:
-        st.warning("⚠️ Instale a biblioteca 'extra-streamlit-components' para manter-se logado.")
-        
-    st.markdown("<br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
+        st.markdown("<br><br>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<h2 style='text-align: center;'>⛽ AutoPosto Pro</h2>", unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; color: gray;'>Acesso Restrito</p>", unsafe_allow_html=True)
-            st.markdown("---")
-            
-            with st.form("form_login"):
-                usuario_digitado = st.text_input("Usuário").strip()
-                senha_digitada = st.text_input("Senha", type="password").strip()
-                btn_entrar = st.form_submit_button("Entrar no Sistema", use_container_width=True, type="primary")
-                
-                if btn_entrar:
-                    with st.spinner("Autenticando..."):
-                        if 'empresas' not in st.session_state: carregar_dados()
-                        
-                        try:
-                            master_user = str(st.secrets["credenciais_acesso"]["usuario"]).strip()
-                            master_pass = str(st.secrets["credenciais_acesso"]["senha"]).strip()
-                        except KeyError:
-                            master_user, master_pass = None, None
-                        
-                        df_usr = st.session_state.get('usuarios', pd.DataFrame())
-                        user_valido = False
-                        
-                        if master_user and usuario_digitado == master_user and senha_digitada == master_pass:
-                            st.session_state['autenticado'] = True
-                            st.session_state['usuario_logado'] = "Admin Master"
-                            st.session_state['perfil_logado'] = "Admin"
-                            user_valido = True
-                        elif not df_usr.empty:
-                            busca = df_usr[(df_usr['Usuario'] == usuario_digitado) & (df_usr['Senha'] == senha_digitada) & (df_usr['Status'] == 'Ativo')]
+            with st.form("login_form"):
+                u = st.text_input("Usuário").strip()
+                p = st.text_input("Senha", type="password").strip()
+                if st.form_submit_button("Acessar Sistema", use_container_width=True, type="primary"):
+                    carregar_dados()
+                    try:
+                        master_u = str(st.secrets["credenciais_acesso"]["usuario"]).strip()
+                        master_p = str(st.secrets["credenciais_acesso"]["senha"]).strip()
+                    except:
+                        master_u, master_p = None, None
+                    
+                    user_ok = False
+                    if master_u and u == master_u and p == master_p:
+                        st.session_state['usuario_logado'] = "Admin Master"
+                        st.session_state['perfil_logado'] = "Admin"
+                        user_ok = True
+                    else:
+                        df_u = st.session_state.get('usuarios', pd.DataFrame())
+                        if not df_u.empty:
+                            busca = df_u[(df_u['Usuario'] == u) & (df_u['Senha'] == p) & (df_u['Status'] == 'Ativo')]
                             if not busca.empty:
-                                st.session_state['autenticado'] = True
                                 st.session_state['usuario_logado'] = busca.iloc[0]['Usuario']
                                 st.session_state['perfil_logado'] = busca.iloc[0]['Perfil']
-                                user_valido = True
-                        
-                        if user_valido:
-                            # Registra o acesso no banco de dados
-                            agora = datetime.utcnow() - timedelta(hours=3) 
-                            novo_log = pd.DataFrame([{'Data/Hora': agora.strftime("%d/%m/%Y %H:%M:%S"), 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado']}])
-                            st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil'])), novo_log], ignore_index=True)
-                            salvar_dados()
+                                user_ok = True
+                    
+                    if user_ok:
+                        if cookie_manager is not None:
+                            cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60, key="login_u")
+                            cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="login_p")
                             
-                            # Salva o Cookie e dá tempo pro navegador gravar
-                            if cookie_manager is not None:
-                                cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60, key="set_u")
-                                cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="set_p")
-                                time.sleep(1.0) 
-                                
-                            st.rerun()
-                        else: st.error("❌ Usuário ou senha incorretos ou inativos!")
-    st.stop() 
+                        st.session_state['autenticado'] = True
+                        agora = (datetime.utcnow() - timedelta(hours=3)).strftime("%d/%m/%Y %H:%M:%S")
+                        st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil'])), pd.DataFrame([{'Data/Hora': agora, 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado']}])], ignore_index=True)
+                        salvar_dados()
+                        time.sleep(1.0)
+                        st.rerun()
+                    else:
+                        st.error("Login ou Senha inválidos.")
+    st.stop()
 
-# Carrega os dados da nuvem para quem já está logado
-if 'empresas' not in st.session_state:
-    with st.spinner("Conectando ao Servidor Google..."):
-        carregar_dados()
+# ==========================================
+# ⚙️ FUNÇÕES DE CÁLCULO (O CÉREBRO DO SISTEMA)
+# ==========================================
+def f_br(val): return "0,00" if pd.isna(val) else "{:,.2f}".format(val).replace(",", "X").replace(".", ",").replace("X", ".")
+def f_int_br(val): return "0" if pd.isna(val) else "{:,.0f}".format(val).replace(",", ".")
+def f_moeda(val): return f"R$ {f_br(val)}"
+def f_pct(val): return f"{f_br(val * 100)}%"
+def cor_style(val): return 'color: #10b981; font-weight: bold;' if val >= 0.90 else 'color: #ef4444; font-weight: bold;'
+
+def calcular_dataframe_resultados(mes_sel, posto_sel):
+    vendas_mes = st.session_state['vendas'][st.session_state['vendas']['Mes'] == mes_sel]
+    vendas_agrupadas = vendas_mes.groupby(['Nome', 'Mes'])[['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']].sum().reset_index()
+    
+    df = pd.merge(st.session_state['equipe'], vendas_agrupadas, on='Nome', how='left')
+    tem_vendas_neste_mes = df['Nome'].isin(vendas_agrupadas['Nome'])
+    df = df[(df['Status'] == 'Ativo') | (tem_vendas_neste_mes)].copy()
+    df.fillna(0, inplace=True)
+
+    if posto_sel != "Todos": df = df[df['Posto'] == posto_sel]
+
+    if not df.empty:
+        df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
+        
+        def extrair_horas(t):
+            matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
+            if len(matches) == 2:
+                h1, m1 = matches[0]; h2, m2 = matches[1]
+                t1 = int(h1)*60 + (int(m1) if m1 else 0)
+                t2 = int(h2)*60 + (int(m2) if m2 else 0)
+                if t2 <= t1: t2 += 24*60
+                return round((t2 - t1) / 60.0, 2)
+            return 0.0
+
+        df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
+        df['Caixa_Visual'] = df.apply(lambda r: f"⏳ Turnos Agrupados ({r['Carga_Horaria']}h)" if r['Carga_Horaria'] < 12.0 else f"🕒 Turno: {r['Turno']}", axis=1)
+        df['Qtd_Caixa'] = df.groupby(['Posto', 'Caixa_Visual'])['Nome'].transform('count')
+
+        for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
+            df[f'max_caixa_{col}'] = df.groupby(['Posto', 'Caixa_Visual'])[col].transform('max')
+            df[f'max_carga_{col}'] = df.groupby(['Posto', 'Carga_Horaria'])[col].transform('max')
+            df[f'{col} %'] = df.apply(lambda r, c=col: r[c] / (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) if (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) > 0 else 0.0, axis=1)
+
+        df['Competição (Ref.)'] = df.apply(lambda r: "Equipe do Quadro" if r['Qtd_Caixa'] > 1 else f"Competindo com Quadro de {r['Carga_Horaria']}h", axis=1)
+
+        def define_meta_ga(cargo):
+            c_limpo = str(cargo).strip().upper()
+            if c_limpo == "CX MANHÃ": return 1800.0
+            elif c_limpo == "CX NOITE": return 2000.0
+            else: return 4000.0
+            
+        df['Meta GA (Salva-Vidas)'] = df['Cargo'].apply(define_meta_ga)
+        df['GC %'] = df.apply(lambda r: r['GC %'] + 0.10 if (r['GC %'] < 0.90 and r['GA'] >= r['Meta GA (Salva-Vidas)']) else r['GC %'], axis=1)
+        df = df.sort_values(by=['Posto', 'Carga_Horaria', 'Turno'], ascending=[True, False, True])
+        
+    return df
 
 # ==========================================
 # MOTOR GERADOR DE EXCEL E PDF
@@ -324,171 +319,324 @@ def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
         doc_erro.build([Paragraph(f"Erro ao formatar o PDF.<br/><br/>Técnico: {str(e)}", getSampleStyleSheet()['Normal'])])
         return buffer_erro.getvalue()
 
+
 # ==========================================
-# MENU LATERAL E BOTÃO DE SAIR
+# 🏠 SISTEMA PRINCIPAL (LOGADO)
 # ==========================================
+if 'empresas' not in st.session_state: 
+    with st.spinner("Conectando ao banco de dados..."):
+        carregar_dados()
+
 with st.sidebar:
     st.title("⛽ AutoPosto Pro")
-    st.markdown(f"👤 Usuário: **{st.session_state['usuario_logado']}**")
+    st.write(f"Usuário Logado: **{st.session_state['usuario_logado']}**")
     st.markdown("---")
     
-    opcoes_menu = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
+    paginas = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
+    if st.session_state['perfil_logado'] == "Admin": paginas.append("🔐 Gestão Acessos")
+    menu = st.radio("Navegação do Sistema", paginas)
     
-    if st.session_state['perfil_logado'] == 'Admin':
-        opcoes_menu.append("🔐 Gestão de Acessos")
-        
-    menu = st.radio("Navegação do Sistema", opcoes_menu)
     st.markdown("---")
-    
-    if st.button("🔄 Atualizar Dados do Google", use_container_width=True):
-        with st.spinner("Buscando dados no Google..."):
+    if st.button("🔄 Sincronizar Google", use_container_width=True):
+        with st.spinner("Atualizando..."):
             carregar_dados()
-        st.success("Dados Atualizados!")
+        st.success("Sincronizado!")
         st.rerun()
-
-    # BOTÃO DEFINITIVO DE SAIR (ANTI-FANTASMA E ANTI-ERRO)
-    if st.button("🚪 Sair do Sistema", use_container_width=True):
-        with st.spinner("Saindo com segurança..."):
-            if cookie_manager is not None:
-                cookie_manager.set("user_posto", "", max_age=0, key="kill_u")
-                cookie_manager.set("perfil_posto", "", max_age=0, key="kill_p")
-                time.sleep(1.0) 
-            
-            st.session_state.clear()
-            st.session_state['ignorar_cookie_temporario'] = True 
-            st.rerun()
         
+    if st.button("🚪 Sair do Sistema", type="secondary", use_container_width=True):
+        if cookie_manager is not None:
+            cookie_manager.set("user_posto", "", max_age=0, key="logout_u")
+            cookie_manager.set("perfil_posto", "", max_age=0, key="logout_p")
+            time.sleep(0.5)
+        st.session_state.clear()
+        st.session_state['ignorar_cookie'] = True 
+        st.rerun()
     st.markdown("---")
-    st.caption("Versão 8.0 | Final Premium")
+    st.caption("Versão 8.1 | Sistema Integrado")
 
-# ==========================================
-# FUNÇÃO DE CÁLCULO GERAL
-# ==========================================
-def calcular_dataframe_resultados(mes_sel, posto_sel):
-    vendas_mes = st.session_state['vendas'][st.session_state['vendas']['Mes'] == mes_sel]
-    vendas_agrupadas = vendas_mes.groupby(['Nome', 'Mes'])[['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']].sum().reset_index()
+# --- TELA: PAINEL GERAL ---
+if menu == "📊 Painel Geral":
+    st.header("📊 Dashboard Operacional")
     
-    df = pd.merge(st.session_state['equipe'], vendas_agrupadas, on='Nome', how='left')
-    tem_vendas_neste_mes = df['Nome'].isin(vendas_agrupadas['Nome'])
-    df = df[(df['Status'] == 'Ativo') | (tem_vendas_neste_mes)].copy()
-    df.fillna(0, inplace=True)
+    with st.container(border=True):
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            meses_disp = sorted(st.session_state['vendas']['Mes'].unique(), reverse=True)
+            mes_sel = st.selectbox("Selecione o Mês", meses_disp if meses_disp else ["Sem Vendas"])
+        with col_f2:
+            posto_sel = st.selectbox("Filtrar Posto", ["Todos"] + list(st.session_state['empresas']['Posto']))
 
-    if posto_sel != "Todos": df = df[df['Posto'] == posto_sel]
+    df = calcular_dataframe_resultados(mes_sel, posto_sel)
 
     if not df.empty:
-        df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
-        
-        def extrair_horas(t):
-            matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
-            if len(matches) == 2:
-                h1, m1 = matches[0]; h2, m2 = matches[1]
-                t1 = int(h1)*60 + (int(m1) if m1 else 0)
-                t2 = int(h2)*60 + (int(m2) if m2 else 0)
-                if t2 <= t1: t2 += 24*60
-                return round((t2 - t1) / 60.0, 2)
-            return 0.0
+        colunas_tabela = ['Turno', 'Cargo', 'Nome', 'Atendimentos', 'Atendimentos %', 'Litragem', 'GC', 'GC %', 'GA', 'Meta GA (Salva-Vidas)', 'GA %', 'S10 - A', 'S10 - A %', 'ETANOL', 'ETANOL %']
 
-        df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
-        df['Caixa_Visual'] = df.apply(lambda r: f"⏳ Turnos Agrupados ({r['Carga_Horaria']}h)" if r['Carga_Horaria'] < 12.0 else f"🕒 Turno: {r['Turno']}", axis=1)
-        df['Qtd_Caixa'] = df.groupby(['Posto', 'Caixa_Visual'])['Nome'].transform('count')
-
-        for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
-            df[f'max_caixa_{col}'] = df.groupby(['Posto', 'Caixa_Visual'])[col].transform('max')
-            df[f'max_carga_{col}'] = df.groupby(['Posto', 'Carga_Horaria'])[col].transform('max')
-            df[f'{col} %'] = df.apply(lambda r, c=col: r[c] / (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) if (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) > 0 else 0.0, axis=1)
-
-        df['Competição (Ref.)'] = df.apply(lambda r: "Equipe do Quadro" if r['Qtd_Caixa'] > 1 else f"Competindo com Quadro de {r['Carga_Horaria']}h", axis=1)
-
-        def define_meta_ga(cargo):
-            c_limpo = str(cargo).strip().upper()
-            if c_limpo == "CX MANHÃ": return 1800.0
-            elif c_limpo == "CX NOITE": return 2000.0
-            else: return 4000.0
+        for posto in sorted(df['Posto'].unique()):
+            st.subheader(f"🏢 {posto}")
+            df_posto = df[df['Posto'] == posto]
             
-        df['Meta GA (Salva-Vidas)'] = df['Cargo'].apply(define_meta_ga)
-        df['GC %'] = df.apply(lambda r: r['GC %'] + 0.10 if (r['GC %'] < 0.90 and r['GA'] >= r['Meta GA (Salva-Vidas)']) else r['GC %'], axis=1)
-        df = df.sort_values(by=['Posto', 'Carga_Horaria', 'Turno'], ascending=[True, False, True])
-        
-    return df
-
-def f_br(val): return "0,00" if pd.isna(val) else "{:,.2f}".format(val).replace(",", "X").replace(".", ",").replace("X", ".")
-def f_int_br(val): return "0" if pd.isna(val) else "{:,.0f}".format(val).replace(",", ".")
-def f_pct(val): return "0,00%" if pd.isna(val) else "{:.2f}%".format(val * 100).replace(".", ",")
-def f_moeda(val): return "R$ 0,00" if pd.isna(val) else "R$ {:,.2f}".format(val).replace(",", "X").replace(".", ",").replace("X", ".")
-def cor_style(val): return 'color: #10b981; font-weight: bold;' if val >= 0.90 else 'color: #ef4444; font-weight: bold;'
-
-# ==========================================
-# GESTÃO DE ACESSOS (SÓ PARA ADMIN)
-# ==========================================
-if menu == "🔐 Gestão de Acessos":
-    st.header("🔐 Gestão de Usuários")
-    st.markdown("Crie usuários e acompanhe o histórico de acessos da sua equipe.")
-    
-    aba_novo_u, aba_editar_u, aba_historico = st.tabs(["🆕 Novo Usuário", "📋 Editar / Inativar", "🕵️ Histórico de Logins"])
-    
-    with aba_novo_u:
-        with st.container(border=True):
-            with st.form("form_usuario", clear_on_submit=True):
-                col1, col2 = st.columns(2)
-                with col1:
-                    novo_login = st.text_input("Login (Ex: gerente.joao)*").strip()
-                    novo_perfil = st.selectbox("Perfil de Acesso", ["Admin", "Operador"], help="Admin tem acesso a esta tela. Operador acessa todo o resto, mas não cria usuários.")
-                with col2:
-                    nova_senha = st.text_input("Senha*", type="password").strip()
-                    
-                if st.form_submit_button("Criar Usuário", type="primary"):
-                    if novo_login and nova_senha:
-                        if novo_login in st.session_state['usuarios']['Usuario'].values:
-                            st.error("Esse login já existe!")
-                        else:
-                            st.session_state['usuarios'] = pd.concat([st.session_state['usuarios'], pd.DataFrame({'Usuario': [novo_login], 'Senha': [nova_senha], 'Perfil': [novo_perfil], 'Status': ['Ativo']})], ignore_index=True)
-                            salvar_dados()
-                            st.success(f"✅ Usuário {novo_login} criado com sucesso!")
-                            st.rerun()
-                    else:
-                        st.warning("Preencha o Login e a Senha.")
-
-    with aba_editar_u:
-        if st.session_state['usuarios'].empty:
-            st.info("Nenhum usuário cadastrado no banco de dados ainda.")
-        else:
-            with st.container(border=True):
-                user_editar = st.selectbox("Selecione o Usuário", st.session_state['usuarios']['Usuario'])
-                dados_u = st.session_state['usuarios'][st.session_state['usuarios']['Usuario'] == user_editar].iloc[0]
+            for caixa in df_posto['Caixa_Visual'].unique():
+                df_caixa = df_posto[df_posto['Caixa_Visual'] == caixa]
                 
-                with st.form("form_editar_usuario"):
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        senha_u = st.text_input("Nova Senha", value=dados_u['Senha'])
-                    with col2:
-                        perfis = ["Admin", "Operador"]
-                        perfil_u = st.selectbox("Perfil", perfis, index=perfis.index(dados_u['Perfil']) if dados_u['Perfil'] in perfis else 0)
-                    with col3:
-                        status_u = st.selectbox("Status", ["Ativo", "Inativo"], index=0 if dados_u['Status'] == 'Ativo' else 1)
-                        
-                    if st.form_submit_button("Atualizar Usuário"):
-                        idx = st.session_state['usuarios'].index[st.session_state['usuarios']['Usuario'] == user_editar][0]
-                        st.session_state['usuarios'].at[idx, 'Senha'] = senha_u.strip()
-                        st.session_state['usuarios'].at[idx, 'Perfil'] = perfil_u
-                        st.session_state['usuarios'].at[idx, 'Status'] = status_u
-                        salvar_dados()
-                        st.success("✅ Usuário atualizado!")
-                        st.rerun()
+                with st.container(border=True):
+                    qtd_equipe = len(df_caixa)
+                    ref_texto = df_caixa['Competição (Ref.)'].iloc[0]
+                    
+                    if "Agrupados" in caixa:
+                        turnos_misturados = " / ".join(sorted(df_caixa['Turno'].unique()))
+                        st.markdown(f"**{caixa}:** {turnos_misturados} &nbsp;&nbsp;|&nbsp;&nbsp; 👥 {qtd_equipe} Colaboradores")
+                    else:
+                        st.markdown(f"**{caixa}** &nbsp;&nbsp;|&nbsp;&nbsp; **⚖️ {ref_texto}** &nbsp;&nbsp;|&nbsp;&nbsp; 👥 {qtd_equipe} Colaborador(es)")
+                    
+                    st.dataframe(
+                        df_caixa[colunas_tabela].style.map(cor_style, subset=[c for c in colunas_tabela if '%' in c]).format({
+                            'Atendimentos': f_int_br, 'Litragem': f_br, 'GC': f_br, 'GA': f_br, 'Meta GA (Salva-Vidas)': f_br, 'S10 - A': f_br, 'ETANOL': f_br,
+                            'Atendimentos %': f_pct, 'GC %': f_pct, 'GA %': f_pct, 'S10 - A %': f_pct, 'ETANOL %': f_pct
+                        }), 
+                        use_container_width=True, hide_index=True
+                    )
             
-            st.subheader("Usuários Cadastrados")
-            st.dataframe(st.session_state['usuarios'][['Usuario', 'Perfil', 'Status']], use_container_width=True, hide_index=True)
+            st.markdown(f"**Resumo de Desempenho - {posto}**")
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("👥 Atendimentos", f_int_br(df_posto['Atendimentos'].sum()))
+            c2.metric("⛽ Litros (Total)", f_br(df_posto['Litragem'].sum()))
+            c3.metric("🟡 Comum (GC)", f_br(df_posto['GC'].sum()))
+            c4.metric("🔴 Aditivada (GA)", f_br(df_posto['GA'].sum()))
+            c5.metric("⚫ S10 - A", f_br(df_posto['S10 - A'].sum()))
+            c6.metric("🟢 Etanol", f_br(df_posto['ETANOL'].sum()))
+            st.markdown("---")
 
-    with aba_historico:
-        st.subheader("Últimos Acessos ao Sistema")
-        df_logs = st.session_state.get('log_acessos', pd.DataFrame())
-        if df_logs.empty:
-            st.info("Nenhum acesso registrado ainda. Os próximos logins aparecerão aqui.")
-        else:
-            st.dataframe(df_logs.iloc[::-1], use_container_width=True, hide_index=True)
+        if posto_sel == "Todos" and len(df['Posto'].unique()) > 1:
+            st.subheader("🏆 Resumo Global da Rede (Todos os Postos)")
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("👥 Atend. Totais", f_int_br(df['Atendimentos'].sum()))
+            c2.metric("⛽ Litros Totais", f_br(df['Litragem'].sum()))
+            c3.metric("🟡 Comum Total", f_br(df['GC'].sum()))
+            c4.metric("🔴 Aditivada Total", f_br(df['GA'].sum()))
+            c5.metric("⚫ S10 - A Total", f_br(df['S10 - A'].sum()))
+            c6.metric("🟢 Etanol Total", f_br(df['ETANOL'].sum()))
 
-# ==========================================
-# TELAS DE CADASTRO
-# ==========================================
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_pdf, col_excel = st.columns(2)
+        df_export = df[['Posto'] + colunas_tabela].copy()
+        
+        for col, func in {'Atendimentos': f_int_br, 'Atendimentos %': f_pct, 'Litragem': f_br, 'GC': f_br, 'GC %': f_pct, 'GA': f_br, 'Meta GA (Salva-Vidas)': f_br, 'GA %': f_pct, 'S10 - A': f_br, 'S10 - A %': f_pct, 'ETANOL': f_br, 'ETANOL %': f_pct}.items():
+            if col in df_export.columns: df_export[col] = df_export[col].apply(func)
+        
+        with col_pdf:
+            if HAS_REPORTLAB:
+                pdf_bytes = gerar_pdf(df_export, f"Painel Operacional - {mes_sel}", agrupar_por='Posto', texto_total="colaboradores")
+                if pdf_bytes: st.download_button("📄 Baixar Painel (PDF)", data=pdf_bytes, file_name=f"Painel_{mes_sel}.pdf", mime="application/pdf", type="primary")
+            else: st.warning("⚠️ Instale: `pip install reportlab`")
+        with col_excel:
+            st.download_button("📊 Baixar Painel (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Painel_{mes_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    else:
+        st.info("Nenhum dado encontrado ou todos os colaboradores estão inativos.")
+
+# --- TELA: BONIFICAÇÃO ---
+elif menu == "💰 Bonificação":
+    st.header("💰 Painel Financeiro e Comissões")
+
+    pct_dia_atual = float(st.session_state['config']['Meta_Dia'].iloc[0])
+    pct_noite_atual = float(st.session_state['config']['Meta_Noite'].iloc[0])
+
+    with st.container(border=True):
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        with col_f1:
+            meses_disp = sorted(st.session_state['vendas']['Mes'].unique(), reverse=True)
+            mes_sel_b = st.selectbox("📅 Mês", meses_disp if meses_disp else ["Sem Vendas"], key='mes_boni')
+        with col_f2:
+            posto_sel_b = st.selectbox("🏢 Unidade", ["Todos"] + list(st.session_state['empresas']['Posto']), key='posto_boni')
+        with col_f3:
+            pct_caixa_dia = st.number_input("☀️ Meta CX MANHÃ (%)", value=pct_dia_atual, step=0.01, format="%.2f")
+        with col_f4:
+            pct_caixa_noite = st.number_input("🌙 Meta CX NOITE (%)", value=pct_noite_atual, step=0.01, format="%.2f")
+
+    if pct_caixa_dia != pct_dia_atual or pct_caixa_noite != pct_noite_atual:
+        st.session_state['config']['Meta_Dia'] = pct_caixa_dia
+        st.session_state['config']['Meta_Noite'] = pct_caixa_noite
+        salvar_dados()
+
+    df_boni = calcular_dataframe_resultados(mes_sel_b, posto_sel_b)
+
+    if not df_boni.empty:
+        tot_litros = df_boni['Litragem'].sum()
+        valor_bonificacao_total = tot_litros * 0.006 
+        valor_bonus_caixa_total = tot_litros * 0.0025 
+        valor_bonificacao_ga_total = df_boni['GA'].sum() * 0.012 
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        col_kpi1.metric("⛽ Volume Base", f"{f_br(tot_litros)} L")
+        col_kpi2.metric("💰 Fundo Pista (0,006/L)", f_moeda(valor_bonificacao_total))
+        col_kpi3.metric("💵 Fundo Caixa Bruto (0,25%)", f_moeda(valor_bonus_caixa_total))
+        col_kpi4.metric("🔴 Total Prêmio Aditivada", f_moeda(valor_bonificacao_ga_total))
+
+        tot_atend = df_boni['Atendimentos'].sum()
+        df_boni['Part. Atendimentos (%)'] = df_boni['Atendimentos'] / tot_atend if tot_atend > 0 else 0.0
+        df_boni['💰 Bonificação (R$)'] = df_boni['Part. Atendimentos (%)'] * valor_bonificacao_total
+        df_boni['Part. Litragem (%)'] = df_boni['Litragem'] / tot_litros if tot_litros > 0 else 0.0
+        df_boni['Mix (GC + GA)'] = df_boni['GC'] + df_boni['GA']
+        df_boni['Participação GC (%)'] = df_boni.apply(lambda r: r['GC'] / r['Litragem'] if r['Litragem'] > 0 else 0.0, axis=1)
+        df_boni['💰 Bonificação GA (R$)'] = df_boni['GA'] * 0.012
+        df_boni['Litragem_Posto'] = df_boni.groupby('Posto')['Litragem'].transform('sum')
+        
+        def calcular_bonus_caixa(row):
+            cargo = str(row['Cargo']).upper().strip()
+            fundo_posto = row['Litragem_Posto'] * 0.0025
+            if 'MANHÃ' in cargo or cargo == 'CX DIA': return (fundo_posto * (pct_caixa_dia / 100)) / 2
+            elif 'NOITE' in cargo: return (fundo_posto * (pct_caixa_noite / 100)) / 2
+            elif 'CX' in cargo or 'CAIXA' in cargo: return (fundo_posto * (pct_caixa_dia / 100)) / 2
+            else: return 0.0
+
+        df_boni['💰 Bônus Caixa (R$)'] = df_boni.apply(calcular_bonus_caixa, axis=1)
+        df_boni['💰 Total a Receber (R$)'] = df_boni['💰 Bonificação (R$)'] + df_boni['💰 Bonificação GA (R$)'] + df_boni['💰 Bônus Caixa (R$)']
+
+        colunas_boni = ['Posto', 'Turno', 'Nome', 'Cargo', 'Atendimentos', 'Part. Atendimentos (%)', '💰 Bonificação (R$)', 'Litragem', 'Part. Litragem (%)', 'Mix (GC + GA)', 'GC', 'Participação GC (%)', 'GA', '💰 Bonificação GA (R$)', '💰 Bônus Caixa (R$)', '💰 Total a Receber (R$)']
+        
+        st.subheader("📝 Folha de Pagamento Detalhada")
+        with st.container(border=True):
+            st.dataframe(
+                df_boni[colunas_boni].style.format({
+                    'Atendimentos': f_int_br, 'Part. Atendimentos (%)': f_pct, '💰 Bonificação (R$)': f_moeda,
+                    'Litragem': f_br, 'Part. Litragem (%)': f_pct, 'Mix (GC + GA)': f_br, 'GC': f_br,
+                    'Participação GC (%)': f_pct, 'GA': f_br, '💰 Bonificação GA (R$)': f_moeda,
+                    '💰 Bônus Caixa (R$)': f_moeda, '💰 Total a Receber (R$)': f_moeda
+                }), use_container_width=True, hide_index=True
+            )
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_pdf, col_excel = st.columns(2)
+        df_export = df_boni[colunas_boni].copy()
+        
+        for col, func in {'Atendimentos': f_int_br, 'Part. Atendimentos (%)': f_pct, '💰 Bonificação (R$)': f_moeda, 'Litragem': f_br, 'Part. Litragem (%)': f_pct, 'Mix (GC + GA)': f_br, 'GC': f_br, 'Participação GC (%)': f_pct, 'GA': f_br, '💰 Bonificação GA (R$)': f_moeda, '💰 Bônus Caixa (R$)': f_moeda, '💰 Total a Receber (R$)': f_moeda}.items():
+            if col in df_export.columns: df_export[col] = df_export[col].apply(func)
+                
+        with col_pdf:
+            if HAS_REPORTLAB:
+                pdf_bytes = gerar_pdf(df_export, f"Folha de Pagamento - {mes_sel_b}", agrupar_por='Posto', texto_total="colaboradores")
+                if pdf_bytes: st.download_button("📄 Baixar Folha (PDF)", data=pdf_bytes, file_name=f"Folha_{mes_sel_b}.pdf", mime="application/pdf", type="primary")
+        with col_excel:
+            st.download_button("📊 Baixar Folha (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Folha_{mes_sel_b}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    else:
+        st.info("Nenhum colaborador ativo.")
+
+# --- TELA: ANIVERSARIANTES ---
+elif menu == "🎂 Aniversariantes":
+    st.header("🎂 Painel de Aniversariantes")
+    aba_lista, aba_importar = st.tabs(["🎉 Lista do Mês", "📥 Importar Base"])
+    
+    with aba_lista:
+        df_niver = st.session_state['aniversarios'].copy()
+        if not df_niver.empty:
+            df_equipe = st.session_state['equipe'][['Nome', 'Posto']].copy()
+            df_equipe['Nome'] = df_equipe['Nome'].astype(str).str.strip().str.upper()
+            df_equipe = df_equipe.drop_duplicates(subset=['Nome'], keep='last')
+            
+            df_niver = pd.merge(df_niver, df_equipe, on='Nome', how='left', suffixes=('', '_eq'))
+            df_niver['Posto'] = df_niver.apply(lambda r: r['Posto_eq'] if (pd.notna(r['Posto_eq']) and r['Posto'] == 'Não Vinculado') else r['Posto'], axis=1)
+            df_niver['Posto'] = df_niver['Posto'].fillna('Não Vinculado') 
+            df_niver['Data_DT'] = pd.to_datetime(df_niver['Data de Nascimento'], errors='coerce', dayfirst=True)
+            df_niver = df_niver.dropna(subset=['Data_DT']).copy()
+            
+            hoje = datetime.today()
+            df_niver['Idade Hoje'] = df_niver['Data_DT'].apply(lambda nasc: hoje.year - nasc.year - ((hoje.month, hoje.day) < (nasc.month, nasc.day)))
+            df_niver['Mês'] = df_niver['Data_DT'].dt.month
+            df_niver['Dia'] = df_niver['Data_DT'].dt.day
+            nomes_meses = {1:'Janeiro', 2:'Fevereiro', 3:'Março', 4:'Abril', 5:'Maio', 6:'Junho', 7:'Julho', 8:'Agosto', 9:'Setembro', 10:'Outubro', 11:'Novembro', 12:'Dezembro'}
+            df_niver['Mês Nome'] = df_niver['Mês'].map(nomes_meses)
+            
+            with st.container(border=True):
+                c1, c2, c3 = st.columns(3)
+                lista_meses = ["Todos"] + [nomes_meses[m] for m in sorted(df_niver['Mês'].unique())]
+                mes_filtro = c1.selectbox("Mês", lista_meses, index=lista_meses.index(nomes_meses.get(hoje.month, "Todos")) if nomes_meses.get(hoje.month, "Todos") in lista_meses else 0)
+                posto_filtro = c2.selectbox("Empresa", ["Todos"] + sorted([str(x) for x in df_niver['Posto'].unique()]))
+                genero_filtro = c3.selectbox("Gênero", ["Todos"] + sorted([str(x) for x in df_niver['Gênero'].unique()]))
+            
+            if mes_filtro != "Todos": df_niver = df_niver[df_niver['Mês Nome'] == mes_filtro]
+            if posto_filtro != "Todos": df_niver = df_niver[df_niver['Posto'] == posto_filtro]
+            if genero_filtro != "Todos": df_niver = df_niver[df_niver['Gênero'] == genero_filtro]
+            
+            df_niver = df_niver.sort_values(by=['Mês', 'Dia'])
+            
+            if not df_niver.empty:
+                st.dataframe(df_niver[['Posto', 'Nome', 'Gênero', 'Data de Nascimento', 'Idade Hoje', 'Mês Nome']].style.format({'Idade Hoje': '{:.0f} anos'}), use_container_width=True, hide_index=True)
+                st.markdown("<br>", unsafe_allow_html=True)
+                col_pdf, col_excel = st.columns(2)
+                df_export = df_niver[['Posto', 'Nome', 'Gênero', 'Data de Nascimento', 'Idade Hoje', 'Mês Nome']].copy()
+                df_export['Idade Hoje'] = df_export['Idade Hoje'].astype(str) + " anos"
+                
+                with col_pdf:
+                    if HAS_REPORTLAB:
+                        pdf_bytes = gerar_pdf(df_export, f"Aniversariantes - {mes_filtro}", agrupar_por='Posto', texto_total="funcionários")
+                        if pdf_bytes: st.download_button("📄 Baixar Relatório (PDF)", data=pdf_bytes, file_name=f"Niver_{mes_filtro}.pdf", mime="application/pdf", type="primary")
+                with col_excel:
+                    st.download_button("📊 Baixar Relatório (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Niver_{mes_filtro}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else: st.info("Nenhum aniversariante para estes filtros.")
+        else: st.info("A base está vazia.")
+
+    with aba_importar:
+        with st.container(border=True):
+            posto_lote = st.selectbox("Vinculação de Empresa:", ["🔍 Detectar da Planilha / Abas do Excel"] + list(st.session_state['empresas']['Posto']))
+            arq_niver = st.file_uploader("Selecione a planilha", type=["xlsx", "xls", "csv"])
+            
+            if arq_niver and st.button("🚀 Processar", type="primary"):
+                try:
+                    lista_dfs = []
+                    is_excel = arq_niver.name.endswith(('.xlsx', '.xls'))
+                    sheet_names = pd.ExcelFile(arq_niver).sheet_names if is_excel else ['CSV_Unico']
+                    
+                    for sheet in sheet_names:
+                        df_teste = pd.read_excel(arq_niver, sheet_name=sheet, header=None) if is_excel else pd.read_csv(arq_niver, header=None, sep=None, engine='python', encoding='utf-8-sig')
+                        linha_cab = next((idx for idx, row in df_teste.head(20).iterrows() if 'NOME' in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) and ('DATA' in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) or 'NASC' in " ".join([str(v).upper() for v in row.values if pd.notna(v)]))), None)
+                                
+                        if linha_cab is not None:
+                            df_imp = pd.read_excel(arq_niver, sheet_name=sheet, header=linha_cab) if is_excel else pd.read_csv(arq_niver, header=linha_cab, sep=None, engine='python', encoding='utf-8-sig')
+                            c_n, c_d, c_p, c_g = None, None, None, None
+                            for c in df_imp.columns:
+                                c_up = str(c).upper().strip()
+                                if 'NOME' in c_up and not c_n: c_n = c
+                                elif ('DATA' in c_up or 'NASC' in c_up) and not c_d: c_d = c
+                                elif ('EMPRESA' in c_up or 'POSTO' in c_up) and not c_p: c_p = c
+                                elif ('SEXO' in c_up or 'GENERO' in c_up or 'GÊNERO' in c_up) and not c_g: c_g = c
+                                
+                            if c_n and c_d:
+                                cols = [c_n, c_d] + ([c_p] if c_p else []) + ([c_g] if c_g else [])
+                                df_novo = df_imp[cols].dropna(subset=[c_n, c_d]).copy()
+                                df_novo.rename(columns={c_n: 'Nome', c_d: 'Data de Nascimento', **({c_p: 'Posto_P'} if c_p else {}), **({c_g: 'Gen_P'} if c_g else {})}, inplace=True)
+                                
+                                df_novo['Data de Nascimento'] = pd.to_datetime(df_novo['Data de Nascimento'], errors='coerce', dayfirst=True).dt.strftime('%d/%m/%Y')
+                                df_novo.dropna(subset=['Data de Nascimento'], inplace=True)
+                                df_novo['Nome'] = df_novo['Nome'].astype(str).str.strip().str.upper()
+                                df_novo.drop_duplicates(subset=['Nome'], keep='last', inplace=True)
+                                
+                                if 'Gen_P' in df_novo.columns:
+                                    df_novo['Gênero'] = df_novo['Gen_P'].apply(lambda g: 'MASCULINO' if str(g).strip().upper() in ['M', 'MASCULINO', 'MASC', 'HOMEM'] else ('FEMININO' if str(g).strip().upper() in ['F', 'FEMININO', 'FEM', 'MULHER'] else 'NÃO INFORMADO'))
+                                    df_novo.drop(columns=['Gen_P'], inplace=True)
+                                else: df_novo['Gênero'] = 'NÃO INFORMADO'
+                                
+                                if posto_lote != "🔍 Detectar da Planilha / Abas do Excel": df_novo['Posto'] = posto_lote
+                                else: df_novo['Posto'] = str(sheet).strip().upper() if is_excel else (df_novo['Posto_P'].astype(str).str.strip().str.upper() if 'Posto_P' in df_novo.columns else 'Não Vinculado')
+                                if 'Posto_P' in df_novo.columns: df_novo.drop(columns=['Posto_P'], inplace=True)
+                                
+                                lista_dfs.append(df_novo)
+
+                    if lista_dfs:
+                        df_final = pd.concat(lista_dfs)
+                        st.session_state['aniversarios'] = pd.concat([st.session_state['aniversarios'], df_final]).drop_duplicates(subset=['Nome'], keep='last')
+                        salvar_dados()
+                        st.success("✅ Registros processados e salvos com sucesso!")
+                        st.rerun()
+                    else: st.error("Tabela não encontrada.")
+                except Exception as e: st.error(f"Erro: {e}")
+                
+            st.markdown("---")
+            if not st.session_state['aniversarios'].empty and st.button("🗑️ Limpar toda a base"):
+                st.session_state['aniversarios'] = pd.DataFrame(columns=['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
+                salvar_dados()
+                st.rerun()
+
+# --- TELA: CADASTRO EMPRESA ---
 elif menu == "🏢 Cadastro Empresa":
     st.header("🏢 Gestão de Empresas")
     aba_nova, aba_editar, aba_excluir = st.tabs(["🆕 Nova Empresa", "✏️ Editar Existente", "⛔ Inativar"])
@@ -535,6 +683,7 @@ elif menu == "🏢 Cadastro Empresa":
         st.subheader("Lista de Postos")
         st.dataframe(st.session_state['empresas'], use_container_width=True, hide_index=True)
 
+# --- TELA: CADASTRO TURNOS ---
 elif menu == "⏰ Cadastro Turnos":
     st.header("⏰ Gestão de Turnos e Horários")
     aba_novo_t, aba_editar_t, aba_excluir_t = st.tabs(["🆕 Novo Turno", "✏️ Editar Turno", "⛔ Inativar Turno"])
@@ -579,6 +728,7 @@ elif menu == "⏰ Cadastro Turnos":
         st.subheader("Turnos Cadastrados")
         st.dataframe(st.session_state['turnos'], use_container_width=True, hide_index=True)
 
+# --- TELA: CADASTRO COLABORADOR ---
 elif menu == "👤 Cadastro Colaborador":
     st.header("👤 Gestão de Colaboradores")
     aba_lista, aba_novo, aba_editar, aba_desligar = st.tabs(["📋 Lista de Colaboradores", "🆕 Novo Cadastro", "✏️ Editar Existente", "⛔ Desligar"])
@@ -643,9 +793,7 @@ elif menu == "👤 Cadastro Colaborador":
                     salvar_dados()
                     st.rerun()
 
-# ==========================================
-# TELA: IMPORTAR PLANILHAS
-# ==========================================
+# --- TELA: IMPORTAR PLANILHAS ---
 elif menu == "📈 Importar Planilhas":
     st.header("📈 Importação de Resultados")
     col_u, col_h = st.columns([1.5, 1])
@@ -763,291 +911,69 @@ elif menu == "📈 Importar Planilhas":
             else:
                 st.info("Nenhum arquivo no histórico.")
 
-# ==========================================
-# TELA: PAINEL GERAL
-# ==========================================
-elif menu == "📊 Painel Geral":
-    st.header("📊 Dashboard Operacional")
+# --- GESTÃO DE ACESSOS ---
+elif menu == "🔐 Gestão de Acessos":
+    st.header("🔐 Gestão de Usuários")
+    st.markdown("Crie usuários e acompanhe o histórico de acessos da sua equipe.")
     
-    with st.container(border=True):
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            meses_disp = sorted(st.session_state['vendas']['Mes'].unique(), reverse=True)
-            mes_sel = st.selectbox("Selecione o Mês", meses_disp if meses_disp else ["Sem Vendas"])
-        with col_f2:
-            posto_sel = st.selectbox("Filtrar Posto", ["Todos"] + list(st.session_state['empresas']['Posto']))
-
-    df = calcular_dataframe_resultados(mes_sel, posto_sel)
-
-    if not df.empty:
-        colunas_tabela = ['Turno', 'Cargo', 'Nome', 'Atendimentos', 'Atendimentos %', 'Litragem', 'GC', 'GC %', 'GA', 'Meta GA (Salva-Vidas)', 'GA %', 'S10 - A', 'S10 - A %', 'ETANOL', 'ETANOL %']
-
-        for posto in sorted(df['Posto'].unique()):
-            st.subheader(f"🏢 {posto}")
-            df_posto = df[df['Posto'] == posto]
-            
-            for caixa in df_posto['Caixa_Visual'].unique():
-                df_caixa = df_posto[df_posto['Caixa_Visual'] == caixa]
-                
-                with st.container(border=True):
-                    qtd_equipe = len(df_caixa)
-                    ref_texto = df_caixa['Competição (Ref.)'].iloc[0]
+    aba_novo_u, aba_editar_u, aba_historico = st.tabs(["🆕 Novo Usuário", "📋 Editar / Inativar", "🕵️ Histórico de Logins"])
+    
+    with aba_novo_u:
+        with st.container(border=True):
+            with st.form("form_usuario", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    novo_login = st.text_input("Login (Ex: gerente.joao)*").strip()
+                    novo_perfil = st.selectbox("Perfil de Acesso", ["Admin", "Operador"], help="Admin tem acesso a esta tela. Operador acessa todo o resto, mas não cria usuários.")
+                with col2:
+                    nova_senha = st.text_input("Senha*", type="password").strip()
                     
-                    if "Agrupados" in caixa:
-                        turnos_misturados = " / ".join(sorted(df_caixa['Turno'].unique()))
-                        st.markdown(f"**{caixa}:** {turnos_misturados} &nbsp;&nbsp;|&nbsp;&nbsp; 👥 {qtd_equipe} Colaboradores")
+                if st.form_submit_button("Criar Usuário", type="primary"):
+                    if novo_login and nova_senha:
+                        if novo_login in st.session_state['usuarios']['Usuario'].values:
+                            st.error("Esse login já existe!")
+                        else:
+                            st.session_state['usuarios'] = pd.concat([st.session_state['usuarios'], pd.DataFrame({'Usuario': [novo_login], 'Senha': [nova_senha], 'Perfil': [novo_perfil], 'Status': ['Ativo']})], ignore_index=True)
+                            salvar_dados()
+                            st.success(f"✅ Usuário {novo_login} criado com sucesso!")
+                            st.rerun()
                     else:
-                        st.markdown(f"**{caixa}** &nbsp;&nbsp;|&nbsp;&nbsp; **⚖️ {ref_texto}** &nbsp;&nbsp;|&nbsp;&nbsp; 👥 {qtd_equipe} Colaborador(es)")
-                    
-                    st.dataframe(
-                        df_caixa[colunas_tabela].style.map(cor_style, subset=[c for c in colunas_tabela if '%' in c]).format({
-                            'Atendimentos': f_int_br, 'Litragem': f_br, 'GC': f_br, 'GA': f_br, 'Meta GA (Salva-Vidas)': f_br, 'S10 - A': f_br, 'ETANOL': f_br,
-                            'Atendimentos %': f_pct, 'GC %': f_pct, 'GA %': f_pct, 'S10 - A %': f_pct, 'ETANOL %': f_pct
-                        }), 
-                        use_container_width=True, hide_index=True
-                    )
-            
-            st.markdown(f"**Resumo de Desempenho - {posto}**")
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("👥 Atendimentos", f_int_br(df_posto['Atendimentos'].sum()))
-            c2.metric("⛽ Litros (Total)", f_br(df_posto['Litragem'].sum()))
-            c3.metric("🟡 Comum (GC)", f_br(df_posto['GC'].sum()))
-            c4.metric("🔴 Aditivada (GA)", f_br(df_posto['GA'].sum()))
-            c5.metric("⚫ S10 - A", f_br(df_posto['S10 - A'].sum()))
-            c6.metric("🟢 Etanol", f_br(df_posto['ETANOL'].sum()))
-            st.markdown("---")
+                        st.warning("Preencha o Login e a Senha.")
 
-        if posto_sel == "Todos" and len(df['Posto'].unique()) > 1:
-            st.subheader("🏆 Resumo Global da Rede (Todos os Postos)")
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("👥 Atend. Totais", f_int_br(df['Atendimentos'].sum()))
-            c2.metric("⛽ Litros Totais", f_br(df['Litragem'].sum()))
-            c3.metric("🟡 Comum Total", f_br(df['GC'].sum()))
-            c4.metric("🔴 Aditivada Total", f_br(df['GA'].sum()))
-            c5.metric("⚫ S10 - A Total", f_br(df['S10 - A'].sum()))
-            c6.metric("🟢 Etanol Total", f_br(df['ETANOL'].sum()))
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_pdf, col_excel = st.columns(2)
-        df_export = df[['Posto'] + colunas_tabela].copy()
-        
-        for col, func in {'Atendimentos': f_int_br, 'Atendimentos %': f_pct, 'Litragem': f_br, 'GC': f_br, 'GC %': f_pct, 'GA': f_br, 'Meta GA (Salva-Vidas)': f_br, 'GA %': f_pct, 'S10 - A': f_br, 'S10 - A %': f_pct, 'ETANOL': f_br, 'ETANOL %': f_pct}.items():
-            if col in df_export.columns: df_export[col] = df_export[col].apply(func)
-        
-        with col_pdf:
-            if HAS_REPORTLAB:
-                pdf_bytes = gerar_pdf(df_export, f"Painel Operacional - {mes_sel}", agrupar_por='Posto', texto_total="colaboradores")
-                if pdf_bytes: st.download_button("📄 Baixar Painel (PDF)", data=pdf_bytes, file_name=f"Painel_{mes_sel}.pdf", mime="application/pdf", type="primary")
-            else: st.warning("⚠️ Instale: `pip install reportlab`")
-        with col_excel:
-            st.download_button("📊 Baixar Painel (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Painel_{mes_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
-        st.info("Nenhum colaborador ativo. Acesse o menu 'Cadastro Colaborador'.")
-
-# ==========================================
-# TELA: BONIFICAÇÃO
-# ==========================================
-elif menu == "💰 Bonificação":
-    st.header("💰 Painel Financeiro e Comissões")
-
-    pct_dia_atual = float(st.session_state['config']['Meta_Dia'].iloc[0])
-    pct_noite_atual = float(st.session_state['config']['Meta_Noite'].iloc[0])
-
-    with st.container(border=True):
-        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-        with col_f1:
-            meses_disp = sorted(st.session_state['vendas']['Mes'].unique(), reverse=True)
-            mes_sel_b = st.selectbox("📅 Mês", meses_disp if meses_disp else ["Sem Vendas"], key='mes_boni')
-        with col_f2:
-            posto_sel_b = st.selectbox("🏢 Unidade", ["Todos"] + list(st.session_state['empresas']['Posto']), key='posto_boni')
-        with col_f3:
-            pct_caixa_dia = st.number_input("☀️ Meta CX MANHÃ (%)", value=pct_dia_atual, step=0.01, format="%.2f")
-        with col_f4:
-            pct_caixa_noite = st.number_input("🌙 Meta CX NOITE (%)", value=pct_noite_atual, step=0.01, format="%.2f")
-
-    if pct_caixa_dia != pct_dia_atual or pct_caixa_noite != pct_noite_atual:
-        st.session_state['config']['Meta_Dia'] = pct_caixa_dia
-        st.session_state['config']['Meta_Noite'] = pct_caixa_noite
-        salvar_dados()
-
-    df_boni = calcular_dataframe_resultados(mes_sel_b, posto_sel_b)
-
-    if not df_boni.empty:
-        tot_litros = df_boni['Litragem'].sum()
-        valor_bonificacao_total = tot_litros * 0.006 
-        valor_bonus_caixa_total = tot_litros * 0.0025 
-        valor_bonificacao_ga_total = df_boni['GA'].sum() * 0.012 
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-        col_kpi1.metric("⛽ Volume Base", f"{f_br(tot_litros)} L")
-        col_kpi2.metric("💰 Fundo Pista (0,006/L)", f_moeda(valor_bonificacao_total))
-        col_kpi3.metric("💵 Fundo Caixa Bruto (0,25%)", f_moeda(valor_bonus_caixa_total))
-        col_kpi4.metric("🔴 Total Prêmio Aditivada", f_moeda(valor_bonificacao_ga_total))
-
-        tot_atend = df_boni['Atendimentos'].sum()
-        df_boni['Part. Atendimentos (%)'] = df_boni['Atendimentos'] / tot_atend if tot_atend > 0 else 0.0
-        df_boni['💰 Bonificação (R$)'] = df_boni['Part. Atendimentos (%)'] * valor_bonificacao_total
-        df_boni['Part. Litragem (%)'] = df_boni['Litragem'] / tot_litros if tot_litros > 0 else 0.0
-        df_boni['Mix (GC + GA)'] = df_boni['GC'] + df_boni['GA']
-        df_boni['Participação GC (%)'] = df_boni.apply(lambda r: r['GC'] / r['Litragem'] if r['Litragem'] > 0 else 0.0, axis=1)
-        df_boni['💰 Bonificação GA (R$)'] = df_boni['GA'] * 0.012
-        df_boni['Litragem_Posto'] = df_boni.groupby('Posto')['Litragem'].transform('sum')
-        
-        def calcular_bonus_caixa(row):
-            cargo = str(row['Cargo']).upper().strip()
-            fundo_posto = row['Litragem_Posto'] * 0.0025
-            if 'MANHÃ' in cargo or cargo == 'CX DIA': return (fundo_posto * (pct_caixa_dia / 100)) / 2
-            elif 'NOITE' in cargo: return (fundo_posto * (pct_caixa_noite / 100)) / 2
-            elif 'CX' in cargo or 'CAIXA' in cargo: return (fundo_posto * (pct_caixa_dia / 100)) / 2
-            else: return 0.0
-
-        df_boni['💰 Bônus Caixa (R$)'] = df_boni.apply(calcular_bonus_caixa, axis=1)
-        df_boni['💰 Total a Receber (R$)'] = df_boni['💰 Bonificação (R$)'] + df_boni['💰 Bonificação GA (R$)'] + df_boni['💰 Bônus Caixa (R$)']
-
-        colunas_boni = ['Posto', 'Turno', 'Nome', 'Cargo', 'Atendimentos', 'Part. Atendimentos (%)', '💰 Bonificação (R$)', 'Litragem', 'Part. Litragem (%)', 'Mix (GC + GA)', 'GC', 'Participação GC (%)', 'GA', '💰 Bonificação GA (R$)', '💰 Bônus Caixa (R$)', '💰 Total a Receber (R$)']
-        
-        st.subheader("📝 Folha de Pagamento Detalhada")
-        with st.container(border=True):
-            st.dataframe(
-                df_boni[colunas_boni].style.format({
-                    'Atendimentos': f_int_br, 'Part. Atendimentos (%)': f_pct, '💰 Bonificação (R$)': f_moeda,
-                    'Litragem': f_br, 'Part. Litragem (%)': f_pct, 'Mix (GC + GA)': f_br, 'GC': f_br,
-                    'Participação GC (%)': f_pct, 'GA': f_br, '💰 Bonificação GA (R$)': f_moeda,
-                    '💰 Bônus Caixa (R$)': f_moeda, '💰 Total a Receber (R$)': f_moeda
-                }), use_container_width=True, hide_index=True
-            )
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_pdf, col_excel = st.columns(2)
-        df_export = df_boni[colunas_boni].copy()
-        
-        for col, func in {'Atendimentos': f_int_br, 'Part. Atendimentos (%)': f_pct, '💰 Bonificação (R$)': f_moeda, 'Litragem': f_br, 'Part. Litragem (%)': f_pct, 'Mix (GC + GA)': f_br, 'GC': f_br, 'Participação GC (%)': f_pct, 'GA': f_br, '💰 Bonificação GA (R$)': f_moeda, '💰 Bônus Caixa (R$)': f_moeda, '💰 Total a Receber (R$)': f_moeda}.items():
-            if col in df_export.columns: df_export[col] = df_export[col].apply(func)
-                
-        with col_pdf:
-            if HAS_REPORTLAB:
-                pdf_bytes = gerar_pdf(df_export, f"Folha de Pagamento - {mes_sel_b}", agrupar_por='Posto', texto_total="colaboradores")
-                if pdf_bytes: st.download_button("📄 Baixar Folha (PDF)", data=pdf_bytes, file_name=f"Folha_{mes_sel_b}.pdf", mime="application/pdf", type="primary")
-            else: st.warning("⚠️ Instale: `pip install reportlab`")
-        with col_excel:
-            st.download_button("📊 Baixar Folha (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Folha_{mes_sel_b}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
-        st.info("Nenhum colaborador ativo.")
-
-# ==========================================
-# TELA: ANIVERSARIANTES
-# ==========================================
-elif menu == "🎂 Aniversariantes":
-    st.header("🎂 Painel de Aniversariantes")
-    aba_lista, aba_importar = st.tabs(["🎉 Lista do Mês", "📥 Importar Base"])
-    
-    with aba_lista:
-        df_niver = st.session_state['aniversarios'].copy()
-        if not df_niver.empty:
-            df_equipe = st.session_state['equipe'][['Nome', 'Posto']].copy()
-            df_equipe['Nome'] = df_equipe['Nome'].astype(str).str.strip().str.upper()
-            df_equipe = df_equipe.drop_duplicates(subset=['Nome'], keep='last')
-            
-            df_niver = pd.merge(df_niver, df_equipe, on='Nome', how='left', suffixes=('', '_eq'))
-            df_niver['Posto'] = df_niver.apply(lambda r: r['Posto_eq'] if (pd.notna(r['Posto_eq']) and r['Posto'] == 'Não Vinculado') else r['Posto'], axis=1)
-            df_niver['Posto'] = df_niver['Posto'].fillna('Não Vinculado') 
-            df_niver['Data_DT'] = pd.to_datetime(df_niver['Data de Nascimento'], errors='coerce', dayfirst=True)
-            df_niver = df_niver.dropna(subset=['Data_DT']).copy()
-            
-            hoje = datetime.today()
-            df_niver['Idade Hoje'] = df_niver['Data_DT'].apply(lambda nasc: hoje.year - nasc.year - ((hoje.month, hoje.day) < (nasc.month, nasc.day)))
-            df_niver['Mês'] = df_niver['Data_DT'].dt.month
-            df_niver['Dia'] = df_niver['Data_DT'].dt.day
-            nomes_meses = {1:'Janeiro', 2:'Fevereiro', 3:'Março', 4:'Abril', 5:'Maio', 6:'Junho', 7:'Julho', 8:'Agosto', 9:'Setembro', 10:'Outubro', 11:'Novembro', 12:'Dezembro'}
-            df_niver['Mês Nome'] = df_niver['Mês'].map(nomes_meses)
-            
+    with aba_editar_u:
+        if st.session_state['usuarios'].empty:
+            st.info("Nenhum usuário cadastrado no banco de dados ainda.")
+        else:
             with st.container(border=True):
-                c1, c2, c3 = st.columns(3)
-                lista_meses = ["Todos"] + [nomes_meses[m] for m in sorted(df_niver['Mês'].unique())]
-                mes_filtro = c1.selectbox("Mês", lista_meses, index=lista_meses.index(nomes_meses.get(hoje.month, "Todos")) if nomes_meses.get(hoje.month, "Todos") in lista_meses else 0)
-                posto_filtro = c2.selectbox("Empresa", ["Todos"] + sorted([str(x) for x in df_niver['Posto'].unique()]))
-                genero_filtro = c3.selectbox("Gênero", ["Todos"] + sorted([str(x) for x in df_niver['Gênero'].unique()]))
-            
-            if mes_filtro != "Todos": df_niver = df_niver[df_niver['Mês Nome'] == mes_filtro]
-            if posto_filtro != "Todos": df_niver = df_niver[df_niver['Posto'] == posto_filtro]
-            if genero_filtro != "Todos": df_niver = df_niver[df_niver['Gênero'] == genero_filtro]
-            
-            df_niver = df_niver.sort_values(by=['Mês', 'Dia'])
-            
-            if not df_niver.empty:
-                st.dataframe(df_niver[['Posto', 'Nome', 'Gênero', 'Data de Nascimento', 'Idade Hoje', 'Mês Nome']].style.format({'Idade Hoje': '{:.0f} anos'}), use_container_width=True, hide_index=True)
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_pdf, col_excel = st.columns(2)
-                df_export = df_niver[['Posto', 'Nome', 'Gênero', 'Data de Nascimento', 'Idade Hoje', 'Mês Nome']].copy()
-                df_export['Idade Hoje'] = df_export['Idade Hoje'].astype(str) + " anos"
+                user_editar = st.selectbox("Selecione o Usuário", st.session_state['usuarios']['Usuario'])
+                dados_u = st.session_state['usuarios'][st.session_state['usuarios']['Usuario'] == user_editar].iloc[0]
                 
-                with col_pdf:
-                    if HAS_REPORTLAB:
-                        pdf_bytes = gerar_pdf(df_export, f"Aniversariantes - {mes_filtro}", agrupar_por='Posto', texto_total="funcionários")
-                        if pdf_bytes: st.download_button("📄 Baixar Relatório (PDF)", data=pdf_bytes, file_name=f"Niver_{mes_filtro}.pdf", mime="application/pdf", type="primary")
-                with col_excel:
-                    st.download_button("📊 Baixar Relatório (Excel)", data=gerar_excel(df_export, agrupar_por='Posto'), file_name=f"Niver_{mes_filtro}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            else: st.info("Nenhum aniversariante para estes filtros.")
-        else: st.info("A base está vazia.")
-
-    with aba_importar:
-        with st.container(border=True):
-            posto_lote = st.selectbox("Vinculação de Empresa:", ["🔍 Detectar da Planilha / Abas do Excel"] + list(st.session_state['empresas']['Posto']))
-            arq_niver = st.file_uploader("Selecione a planilha", type=["xlsx", "xls", "csv"])
-            
-            if arq_niver and st.button("🚀 Processar", type="primary"):
-                try:
-                    lista_dfs = []
-                    is_excel = arq_niver.name.endswith(('.xlsx', '.xls'))
-                    sheet_names = pd.ExcelFile(arq_niver).sheet_names if is_excel else ['CSV_Unico']
-                    
-                    for sheet in sheet_names:
-                        df_teste = pd.read_excel(arq_niver, sheet_name=sheet, header=None) if is_excel else pd.read_csv(arq_niver, header=None, sep=None, engine='python', encoding='utf-8-sig')
-                        linha_cab = next((idx for idx, row in df_teste.head(20).iterrows() if 'NOME' in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) and ('DATA' in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) or 'NASC' in " ".join([str(v).upper() for v in row.values if pd.notna(v)]))), None)
-                                
-                        if linha_cab is not None:
-                            df_imp = pd.read_excel(arq_niver, sheet_name=sheet, header=linha_cab) if is_excel else pd.read_csv(arq_niver, header=linha_cab, sep=None, engine='python', encoding='utf-8-sig')
-                            c_n, c_d, c_p, c_g = None, None, None, None
-                            for c in df_imp.columns:
-                                c_up = str(c).upper().strip()
-                                if 'NOME' in c_up and not c_n: c_n = c
-                                elif ('DATA' in c_up or 'NASC' in c_up) and not c_d: c_d = c
-                                elif ('EMPRESA' in c_up or 'POSTO' in c_up) and not c_p: c_p = c
-                                elif ('SEXO' in c_up or 'GENERO' in c_up or 'GÊNERO' in c_up) and not c_g: c_g = c
-                                
-                            if c_n and c_d:
-                                cols = [c_n, c_d] + ([c_p] if c_p else []) + ([c_g] if c_g else [])
-                                df_novo = df_imp[cols].dropna(subset=[c_n, c_d]).copy()
-                                df_novo.rename(columns={c_n: 'Nome', c_d: 'Data de Nascimento', **({c_p: 'Posto_P'} if c_p else {}), **({c_g: 'Gen_P'} if c_g else {})}, inplace=True)
-                                
-                                df_novo['Data de Nascimento'] = pd.to_datetime(df_novo['Data de Nascimento'], errors='coerce', dayfirst=True).dt.strftime('%d/%m/%Y')
-                                df_novo.dropna(subset=['Data de Nascimento'], inplace=True)
-                                df_novo['Nome'] = df_novo['Nome'].astype(str).str.strip().str.upper()
-                                df_novo.drop_duplicates(subset=['Nome'], keep='last', inplace=True)
-                                
-                                if 'Gen_P' in df_novo.columns:
-                                    df_novo['Gênero'] = df_novo['Gen_P'].apply(lambda g: 'MASCULINO' if str(g).strip().upper() in ['M', 'MASCULINO', 'MASC', 'HOMEM'] else ('FEMININO' if str(g).strip().upper() in ['F', 'FEMININO', 'FEM', 'MULHER'] else 'NÃO INFORMADO'))
-                                    df_novo.drop(columns=['Gen_P'], inplace=True)
-                                else: df_novo['Gênero'] = 'NÃO INFORMADO'
-                                
-                                if posto_lote != "🔍 Detectar da Planilha / Abas do Excel": df_novo['Posto'] = posto_lote
-                                else: df_novo['Posto'] = str(sheet).strip().upper() if is_excel else (df_novo['Posto_P'].astype(str).str.strip().str.upper() if 'Posto_P' in df_novo.columns else 'Não Vinculado')
-                                if 'Posto_P' in df_novo.columns: df_novo.drop(columns=['Posto_P'], inplace=True)
-                                
-                                lista_dfs.append(df_novo)
-
-                    if lista_dfs:
-                        df_final = pd.concat(lista_dfs)
-                        st.session_state['aniversarios'] = pd.concat([st.session_state['aniversarios'], df_final]).drop_duplicates(subset=['Nome'], keep='last')
+                with st.form("form_editar_usuario"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        senha_u = st.text_input("Nova Senha", value=dados_u['Senha'])
+                    with col2:
+                        perfis = ["Admin", "Operador"]
+                        perfil_u = st.selectbox("Perfil", perfis, index=perfis.index(dados_u['Perfil']) if dados_u['Perfil'] in perfis else 0)
+                    with col3:
+                        status_u = st.selectbox("Status", ["Ativo", "Inativo"], index=0 if dados_u['Status'] == 'Ativo' else 1)
+                        
+                    if st.form_submit_button("Atualizar Usuário"):
+                        idx = st.session_state['usuarios'].index[st.session_state['usuarios']['Usuario'] == user_editar][0]
+                        st.session_state['usuarios'].at[idx, 'Senha'] = senha_u.strip()
+                        st.session_state['usuarios'].at[idx, 'Perfil'] = perfil_u
+                        st.session_state['usuarios'].at[idx, 'Status'] = status_u
                         salvar_dados()
-                        st.success("✅ Registros processados e salvos com sucesso!")
+                        st.success("✅ Usuário atualizado!")
                         st.rerun()
-                    else: st.error("Tabela não encontrada.")
-                except Exception as e: st.error(f"Erro: {e}")
-                
-            st.markdown("---")
-            if not st.session_state['aniversarios'].empty and st.button("🗑️ Limpar toda a base"):
-                st.session_state['aniversarios'] = pd.DataFrame(columns=['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
-                salvar_dados()
-                st.rerun()
+            
+            st.subheader("Usuários Cadastrados")
+            st.dataframe(st.session_state['usuarios'][['Usuario', 'Perfil', 'Status']], use_container_width=True, hide_index=True)
+
+    with aba_historico:
+        st.subheader("Últimos Acessos ao Sistema")
+        df_logs = st.session_state.get('log_acessos', pd.DataFrame())
+        if df_logs.empty:
+            st.info("Nenhum acesso registrado ainda. Os próximos logins aparecerão aqui.")
+        else:
+            st.dataframe(df_logs.iloc[::-1], use_container_width=True, hide_index=True)
