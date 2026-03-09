@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import os
 import io
+import time # Motor de tempo adicionado!
 from datetime import datetime, timedelta
 
 # --- IMPORTAÇÕES DO GOOGLE SHEETS ---
@@ -168,15 +169,23 @@ if 'autenticado' not in st.session_state:
     st.session_state['usuario_logado'] = ""
     st.session_state['perfil_logado'] = ""
 
-# Verifica se o usuário já tem o cookie salvo no navegador
+# 🔄 FREIO ANTI-F5 E RECUPERAÇÃO DE SESSÃO
 if not st.session_state['autenticado'] and cookie_manager is not None:
-    c_user = cookie_manager.get(cookie="user_posto")
-    c_perfil = cookie_manager.get(cookie="perfil_posto")
-    if c_user and c_perfil:
+    cookies_salvos = cookie_manager.get_all()
+    
+    # Se o navegador respondeu e achou a chave
+    if isinstance(cookies_salvos, dict) and "user_posto" in cookies_salvos and cookies_salvos["user_posto"]:
         st.session_state['autenticado'] = True
-        st.session_state['usuario_logado'] = str(c_user)
-        st.session_state['perfil_logado'] = str(c_perfil)
+        st.session_state['usuario_logado'] = str(cookies_salvos["user_posto"])
+        st.session_state['perfil_logado'] = str(cookies_salvos.get("perfil_posto", "Operador"))
         st.rerun()
+    else:
+        # Se não achou, pode ser porque o navegador foi lento (clássico ao apertar F5).
+        # Vamos piscar a tela e tentar de novo em meio segundo antes de deslogar.
+        if 'esperou_f5' not in st.session_state:
+            st.session_state['esperou_f5'] = True
+            time.sleep(0.6) # Freio mágico 🪄
+            st.rerun()
 
 if not st.session_state['autenticado']:
     if not HAS_COOKIES:
@@ -230,8 +239,9 @@ if not st.session_state['autenticado']:
                             
                             # Salva o Carimbo no Navegador por 30 dias
                             if cookie_manager is not None:
-                                cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60, key="set_u")
-                                cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="set_p")
+                                cookie_manager.set("user_posto", st.session_state['usuario_logado'], max_age=30*24*60*60)
+                                cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60)
+                                time.sleep(1.0) # Freio para garantir que o navegador guardou a chave ANTES de entrar!
                                 
                             st.rerun()
                         else: st.error("❌ Usuário ou senha incorretos ou inativos!")
@@ -319,7 +329,7 @@ def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
         return buffer_erro.getvalue()
 
 # ==========================================
-# MENU LATERAL
+# MENU LATERAL E BOTÃO DE SAIR
 # ==========================================
 with st.sidebar:
     st.title("⛽ AutoPosto Pro")
@@ -334,17 +344,26 @@ with st.sidebar:
     menu = st.radio("Navegação do Sistema", opcoes_menu)
     st.markdown("---")
     
-    if st.button("🚪 Sair do Sistema", use_container_width=True):
-        if cookie_manager is not None:
-            cookie_manager.delete("user_posto", key="del_u")
-            cookie_manager.delete("perfil_posto", key="del_p")
-        st.session_state['autenticado'] = False
-        st.session_state['usuario_logado'] = ""
-        st.session_state['perfil_logado'] = ""
+    if st.button("🔄 Atualizar Dados do Google", use_container_width=True):
+        with st.spinner("Buscando dados no Google..."):
+            carregar_dados()
+        st.success("Dados Atualizados!")
         st.rerun()
+
+    # BOTÃO DEFINITIVO DE SAIR
+    if st.button("🚪 Sair do Sistema", use_container_width=True):
+        with st.spinner("Saindo com segurança..."):
+            if cookie_manager is not None:
+                cookie_manager.delete("user_posto")
+                cookie_manager.delete("perfil_posto")
+                time.sleep(1.0) # Freio para garantir que o navegador jogou a chave fora
+            
+            # Limpa toda a memória da sessão como uma bomba nuclear!
+            st.session_state.clear()
+            st.rerun()
         
     st.markdown("---")
-    st.caption("Versão 6.3 | Cookies & Auditoria")
+    st.caption("Versão 6.6 | Sessão Blindada")
 
 # ==========================================
 # FUNÇÃO DE CÁLCULO GERAL
