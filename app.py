@@ -24,9 +24,12 @@ except ImportError:
     HAS_REPORTLAB = False
 
 # ==========================================
-# 🛑 COLE O ID DA SUA PLANILHA AQUI ABAIXO:
+# 🛑 PUXANDO O ID DA PLANILHA DO COFRE SECRETO:
 # ==========================================
-PLANILHA_ID = "1TKD0UaTm-wxALJ426T19RjXldPHA-DkJ40BbdN9wS80"
+try:
+    PLANILHA_ID = st.secrets["PLANILHA_ID"]
+except KeyError:
+    PLANILHA_ID = "" # Prevenção de erro caso esqueça de colocar no Streamlit
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="AutoPosto Pro", page_icon="⛽", layout="wide", initial_sidebar_state="expanded")
