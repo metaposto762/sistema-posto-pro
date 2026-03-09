@@ -20,9 +20,9 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    HAS_PDF = True
+    HAS_REPORTLAB = True
 except ImportError:
-    HAS_PDF = False
+    HAS_REPORTLAB = False
 
 # ==========================================
 # 🛑 CONFIGURAÇÕES INICIAIS
