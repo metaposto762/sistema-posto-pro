@@ -65,7 +65,6 @@ def get_gsheets_client():
     if os.path.exists('credenciais.json'):
         creds = Credentials.from_service_account_file('credenciais.json', scopes=scope)
     else:
-        # Quando for pra nuvem, ele vai ler das configurações secretas do Streamlit
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(creds)
@@ -118,11 +117,22 @@ def salvar_dados():
         doc = client.open_by_key(PLANILHA_ID)
         
         def save_ws(name, df):
-            ws = doc.worksheet(name)
+            # Cria a aba automaticamente se ela não existir
+            try:
+                ws = doc.worksheet(name)
+            except gspread.exceptions.WorksheetNotFound:
+                ws = doc.add_worksheet(title=name, rows="1000", cols="20")
+            
             ws.clear()
-            df_clean = df.fillna("")
+            # CONVERSÃO ABSOLUTA: Transforma TUDO em texto para o Google não rejeitar formatos estranhos
+            df_clean = df.fillna("").astype(str)
             dados = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
-            ws.update(range_name='A1', values=dados)
+            
+            # Envia para a nuvem
+            try:
+                ws.update(values=dados, range_name='A1')
+            except TypeError:
+                ws.update('A1', dados)
             
         save_ws('empresas', st.session_state['empresas'])
         save_ws('turnos', st.session_state['turnos'])
@@ -134,7 +144,9 @@ def salvar_dados():
         log_df = pd.DataFrame(st.session_state['processados_list']) if st.session_state['processados_list'] else pd.DataFrame(columns=['id', 'Arquivo', 'Mês', 'Tipo'])
         save_ws('log', log_df)
     except Exception as e:
-        st.error(f"Erro ao salvar na nuvem: {e}")
+        # Trava a tela e exibe o erro se o Google rejeitar a conexão
+        st.error(f"🛑 Erro ao salvar os dados na nuvem: {e}")
+        st.stop()
 
 if 'empresas' not in st.session_state:
     with st.spinner("Conectando ao Servidor Google..."):
@@ -227,7 +239,7 @@ with st.sidebar:
         ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
     )
     st.markdown("---")
-    st.caption("Versão 5.0 | CLOUD GOOGLE SHEETS")
+    st.caption("Versão 5.1 | CLOUD GOOGLE SHEETS")
 
 # ==========================================
 # FUNÇÃO DE CÁLCULO GERAL
@@ -839,8 +851,10 @@ elif menu == "🎂 Aniversariantes":
                     if lista_dfs:
                         df_final = pd.concat(lista_dfs)
                         st.session_state['aniversarios'] = pd.concat([st.session_state['aniversarios'], df_final]).drop_duplicates(subset=['Nome'], keep='last')
-                        salvar_dados()
-                        st.success("✅ Registros processados!")
+                        
+                        salvar_dados() # Agora o salvar_dados está blindado contra quedas
+                        
+                        st.success("✅ Registros processados e salvos com sucesso!")
                         st.rerun()
                     else: st.error("Tabela não encontrada.")
                 except Exception as e: st.error(f"Erro: {e}")
