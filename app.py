@@ -31,7 +31,7 @@ st.set_page_config(page_title="AutoPosto Pro", page_icon="⛽", layout="wide", i
 
 try:
     PLANILHA_ID = st.secrets["PLANILHA_ID"]
-except:
+except KeyError:
     st.error("❌ PLANILHA_ID não encontrado nos Secrets do Streamlit!")
     st.stop()
 
@@ -56,9 +56,8 @@ if 'autenticado' not in st.session_state:
 
 cookie_manager = None
 if HAS_LIBS:
-    cookie_manager = stx.CookieManager(key="mestre_posto_v4")
+    cookie_manager = stx.CookieManager(key="mestre_posto_v5")
 
-# Recuperação Automática Segura (Sem usar loop para evitar erro de duplicação)
 if not st.session_state['autenticado'] and cookie_manager is not None:
     if not st.session_state.get('ignorar_cookie', False):
         cookies = cookie_manager.get_all()
@@ -68,10 +67,26 @@ if not st.session_state['autenticado'] and cookie_manager is not None:
             st.session_state['perfil_logado'] = str(cookies.get("perfil_posto", "Operador"))
             st.rerun()
         elif 'tentou_recuperar' not in st.session_state:
-            # O navegador demora a responder? Dá um freio de meio segundo e recarrega 1 única vez.
             st.session_state['tentou_recuperar'] = True
             time.sleep(0.5)
             st.rerun()
+
+# ==========================================
+# 📡 RASTREADOR DE DISPOSITIVOS
+# ==========================================
+def get_device():
+    try:
+        ua = st.context.headers.get("User-Agent", "").lower()
+    except:
+        ua = ""
+    
+    if not ua: return "🖥️ Desconhecido"
+    if "android" in ua: return "📱 Celular (Android)"
+    elif "iphone" in ua or "ipad" in ua: return "📱 Celular (iOS)"
+    elif "windows" in ua: return "💻 PC (Windows)"
+    elif "macintosh" in ua or "mac os" in ua: return "💻 PC (Mac)"
+    elif "linux" in ua: return "💻 PC (Linux)"
+    else: return "🖥️ Sistema Web"
 
 # ==========================================
 # 📊 MOTOR DO GOOGLE SHEETS
@@ -102,14 +117,16 @@ def carregar_dados():
         st.session_state['processados_list'] = load_ws('log', ['id', 'Arquivo', 'Mês', 'Tipo']).to_dict('records')
         st.session_state['config'] = load_ws('config', ['Meta_Dia', 'Meta_Noite'])
         st.session_state['aniversarios'] = load_ws('aniversarios', ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
-        st.session_state['log_acessos'] = load_ws('log_acessos', ['Data/Hora', 'Usuário', 'Perfil'])
+        
+        # Agora o Histórico inclui Dispositivo
+        st.session_state['log_acessos'] = load_ws('log_acessos', ['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])
         
         if st.session_state['config'].empty:
             st.session_state['config'] = pd.DataFrame({'Meta_Dia': [19.63], 'Meta_Noite': [15.00]})
             
-        # Converte colunas numéricas de vendas
         for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
-            st.session_state['vendas'][col] = pd.to_numeric(st.session_state['vendas'][col], errors='coerce').fillna(0)
+            if col in st.session_state['vendas'].columns:
+                st.session_state['vendas'][col] = pd.to_numeric(st.session_state['vendas'][col], errors='coerce').fillna(0)
             
     except Exception as e:
         st.error(f"Erro de Conexão Google: {e}")
@@ -147,6 +164,9 @@ if not st.session_state['autenticado']:
         st.markdown("<br><br>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<h2 style='text-align: center;'>⛽ AutoPosto Pro</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: gray;'>Acesso Restrito</p>", unsafe_allow_html=True)
+            st.markdown("---")
+            
             with st.form("login_form"):
                 u = st.text_input("Usuário").strip()
                 p = st.text_input("Senha", type="password").strip()
@@ -178,9 +198,15 @@ if not st.session_state['autenticado']:
                             cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="login_p")
                             
                         st.session_state['autenticado'] = True
+                        
+                        # 📡 Grava o Dispositivo junto com o Histórico!
                         agora = (datetime.utcnow() - timedelta(hours=3)).strftime("%d/%m/%Y %H:%M:%S")
-                        st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil'])), pd.DataFrame([{'Data/Hora': agora, 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado']}])], ignore_index=True)
+                        disp = get_device()
+                        novo_log = pd.DataFrame([{'Data/Hora': agora, 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado'], 'Dispositivo': disp}])
+                        
+                        st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])), novo_log], ignore_index=True)
                         salvar_dados()
+                        
                         time.sleep(1.0)
                         st.rerun()
                     else:
@@ -319,7 +345,6 @@ def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
         doc_erro.build([Paragraph(f"Erro ao formatar o PDF.<br/><br/>Técnico: {str(e)}", getSampleStyleSheet()['Normal'])])
         return buffer_erro.getvalue()
 
-
 # ==========================================
 # 🏠 SISTEMA PRINCIPAL (LOGADO)
 # ==========================================
@@ -333,14 +358,15 @@ with st.sidebar:
     st.markdown("---")
     
     paginas = ["📊 Painel Geral", "💰 Bonificação", "🎂 Aniversariantes", "🏢 Cadastro Empresa", "⏰ Cadastro Turnos", "👤 Cadastro Colaborador", "📈 Importar Planilhas"]
-    if st.session_state['perfil_logado'] == "Admin": paginas.append("🔐 Gestão Acessos")
+    if st.session_state['perfil_logado'] == "Admin": paginas.append("🔐 Gestão de Acessos")
     menu = st.radio("Navegação do Sistema", paginas)
     
     st.markdown("---")
-    if st.button("🔄 Sincronizar Google", use_container_width=True):
+    if st.button("🔄 Atualizar Dados do Google", use_container_width=True):
         with st.spinner("Atualizando..."):
             carregar_dados()
         st.success("Sincronizado!")
+        time.sleep(1)
         st.rerun()
         
     if st.button("🚪 Sair do Sistema", type="secondary", use_container_width=True):
@@ -352,7 +378,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 8.1 | Sistema Integrado")
+    st.caption("Versão 9.0 | Ultimate Sec")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -626,6 +652,7 @@ elif menu == "🎂 Aniversariantes":
                         st.session_state['aniversarios'] = pd.concat([st.session_state['aniversarios'], df_final]).drop_duplicates(subset=['Nome'], keep='last')
                         salvar_dados()
                         st.success("✅ Registros processados e salvos com sucesso!")
+                        time.sleep(1)
                         st.rerun()
                     else: st.error("Tabela não encontrada.")
                 except Exception as e: st.error(f"Erro: {e}")
@@ -646,9 +673,10 @@ elif menu == "🏢 Cadastro Empresa":
             with st.form("form_empresa", clear_on_submit=True):
                 novo_posto = st.text_input("Nome da Empresa (Igual ao cabeçalho do relatório)*").upper()
                 if st.form_submit_button("Cadastrar Posto", type="primary") and novo_posto:
-                    st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame({'Posto': [novo_posto], 'Status': ['Ativo']})], ignore_index=True)
+                    st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame([{'Posto': novo_posto, 'Status': 'Ativo'}])], ignore_index=True)
                     salvar_dados()
-                    st.success(f"✅ {novo_posto} cadastrado!")
+                    st.success(f"✅ {novo_posto} cadastrado com sucesso!")
+                    time.sleep(1)
                     st.rerun()
     
     with aba_editar:
@@ -666,6 +694,7 @@ elif menu == "🏢 Cadastro Empresa":
                         st.session_state['empresas'].at[idx, 'Status'] = novo_status_emp
                         salvar_dados()
                         st.success("✅ Atualizado!")
+                        time.sleep(1)
                         st.rerun()
 
     with aba_excluir:
@@ -677,6 +706,8 @@ elif menu == "🏢 Cadastro Empresa":
                     idx = st.session_state['empresas'].index[st.session_state['empresas']['Posto'] == emp_inativar][0]
                     st.session_state['empresas'].at[idx, 'Status'] = 'Inativo'
                     salvar_dados()
+                    st.success("✅ Empresa Inativada!")
+                    time.sleep(1)
                     st.rerun()
 
     if not st.session_state['empresas'].empty:
@@ -693,8 +724,10 @@ elif menu == "⏰ Cadastro Turnos":
             with st.form("form_turno", clear_on_submit=True):
                 novo_turno = st.text_input("Descrição do Turno (Ex: 06h às 18h)*").upper()
                 if st.form_submit_button("Criar Turno", type="primary") and novo_turno:
-                    st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame({'Turno': [novo_turno], 'Status': ['Ativo']})], ignore_index=True)
+                    st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame([{'Turno': novo_turno, 'Status': 'Ativo'}])], ignore_index=True)
                     salvar_dados()
+                    st.success("✅ Turno Criado!")
+                    time.sleep(1)
                     st.rerun()
 
     with aba_editar_t:
@@ -711,6 +744,8 @@ elif menu == "⏰ Cadastro Turnos":
                         st.session_state['turnos'].at[idx, 'Turno'] = novo_nome_turno
                         st.session_state['turnos'].at[idx, 'Status'] = novo_status_turno
                         salvar_dados()
+                        st.success("✅ Turno Atualizado!")
+                        time.sleep(1)
                         st.rerun()
 
     with aba_excluir_t:
@@ -722,6 +757,8 @@ elif menu == "⏰ Cadastro Turnos":
                     idx = st.session_state['turnos'].index[st.session_state['turnos']['Turno'] == turno_inativar][0]
                     st.session_state['turnos'].at[idx, 'Status'] = 'Inativo'
                     salvar_dados()
+                    st.success("✅ Turno Inativado!")
+                    time.sleep(1)
                     st.rerun()
 
     if not st.session_state['turnos'].empty:
@@ -752,8 +789,10 @@ elif menu == "👤 Cadastro Colaborador":
                         turno_f = st.selectbox("Turno", turnos_ativos) 
                         cargo_f = st.selectbox("Cargo", ["Frentista", "CX MANHÃ", "CX NOITE", "Gerente", "Chefe de Pista"])
                     if st.form_submit_button("Salvar Colaborador", type="primary") and nome_f:
-                        st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame({'Posto': [posto_f], 'Turno': [turno_f], 'Cargo': [cargo_f], 'Nome': [nome_f], 'Status': ['Ativo']})], ignore_index=True)
+                        st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame([{'Posto': posto_f, 'Turno': turno_f, 'Cargo': cargo_f, 'Nome': nome_f, 'Status': 'Ativo'}])], ignore_index=True)
                         salvar_dados()
+                        st.success("✅ Colaborador cadastrado!")
+                        time.sleep(1)
                         st.rerun()
 
     with aba_editar:
@@ -764,7 +803,7 @@ elif menu == "👤 Cadastro Colaborador":
                 with st.form("form_edicao"):
                     col1, col2 = st.columns(2)
                     with col1:
-                        novo_posto_e = st.selectbox("Posto", st.session_state['empresas']['Posto'], index=list(st.session_state['empresas']['Posto']).index(dados_atuais['Posto']))
+                        novo_posto_e = st.selectbox("Posto", st.session_state['empresas']['Posto'], index=list(st.session_state['empresas']['Posto']).index(dados_atuais['Posto']) if dados_atuais['Posto'] in list(st.session_state['empresas']['Posto']) else 0)
                         novo_nome_e = st.text_input("Nome", value=dados_atuais['Nome']).upper()
                         novo_status_e = st.selectbox("Status", ["Ativo", "Inativo"], index=0 if dados_atuais.get('Status', 'Ativo') == 'Ativo' else 1)
                     with col2:
@@ -780,6 +819,8 @@ elif menu == "👤 Cadastro Colaborador":
                         st.session_state['equipe'].at[idx, 'Nome'] = novo_nome_e
                         st.session_state['equipe'].at[idx, 'Status'] = novo_status_e
                         salvar_dados()
+                        st.success("✅ Informações atualizadas!")
+                        time.sleep(1)
                         st.rerun()
 
     with aba_desligar:
@@ -791,6 +832,8 @@ elif menu == "👤 Cadastro Colaborador":
                     idx = st.session_state['equipe'].index[st.session_state['equipe']['Nome'] == colab_inativar][0]
                     st.session_state['equipe'].at[idx, 'Status'] = 'Inativo'
                     salvar_dados()
+                    st.success("✅ Colaborador desligado!")
+                    time.sleep(1)
                     st.rerun()
 
 # --- TELA: IMPORTAR PLANILHAS ---
@@ -911,10 +954,10 @@ elif menu == "📈 Importar Planilhas":
             else:
                 st.info("Nenhum arquivo no histórico.")
 
-# --- GESTÃO DE ACESSOS ---
+# --- TELA: GESTÃO DE ACESSOS (COM RASTREADOR) ---
 elif menu == "🔐 Gestão de Acessos":
     st.header("🔐 Gestão de Usuários")
-    st.markdown("Crie usuários e acompanhe o histórico de acessos da sua equipe.")
+    st.markdown("Crie usuários e acompanhe o histórico e os dispositivos usados pela sua equipe.")
     
     aba_novo_u, aba_editar_u, aba_historico = st.tabs(["🆕 Novo Usuário", "📋 Editar / Inativar", "🕵️ Histórico de Logins"])
     
@@ -924,25 +967,30 @@ elif menu == "🔐 Gestão de Acessos":
                 col1, col2 = st.columns(2)
                 with col1:
                     novo_login = st.text_input("Login (Ex: gerente.joao)*").strip()
-                    novo_perfil = st.selectbox("Perfil de Acesso", ["Admin", "Operador"], help="Admin tem acesso a esta tela. Operador acessa todo o resto, mas não cria usuários.")
+                    novo_perfil = st.selectbox("Perfil de Acesso", ["Admin", "Operador"], help="Admin tem acesso a esta tela. Operador não cria usuários.")
                 with col2:
                     nova_senha = st.text_input("Senha*", type="password").strip()
                     
                 if st.form_submit_button("Criar Usuário", type="primary"):
                     if novo_login and nova_senha:
-                        if novo_login in st.session_state['usuarios']['Usuario'].values:
-                            st.error("Esse login já existe!")
+                        # Validação de Duplicidade Sólida
+                        usuarios_existentes = st.session_state.get('usuarios', pd.DataFrame())
+                        if not usuarios_existentes.empty and novo_login in usuarios_existentes['Usuario'].astype(str).values:
+                            st.error("⚠️ Esse login já existe!")
                         else:
-                            st.session_state['usuarios'] = pd.concat([st.session_state['usuarios'], pd.DataFrame({'Usuario': [novo_login], 'Senha': [nova_senha], 'Perfil': [novo_perfil], 'Status': ['Ativo']})], ignore_index=True)
+                            # Correção da Sintaxe Pandas!
+                            novo_usr_df = pd.DataFrame([{'Usuario': novo_login, 'Senha': nova_senha, 'Perfil': novo_perfil, 'Status': 'Ativo'}])
+                            st.session_state['usuarios'] = pd.concat([st.session_state.get('usuarios', pd.DataFrame()), novo_usr_df], ignore_index=True)
                             salvar_dados()
-                            st.success(f"✅ Usuário {novo_login} criado com sucesso!")
+                            st.success(f"✅ Usuário '{novo_login}' criado com sucesso!")
+                            time.sleep(1.0) # A pausa mágica para você ler a mensagem!
                             st.rerun()
                     else:
-                        st.warning("Preencha o Login e a Senha.")
+                        st.warning("⚠️ Preencha o Login e a Senha.")
 
     with aba_editar_u:
-        if st.session_state['usuarios'].empty:
-            st.info("Nenhum usuário cadastrado no banco de dados ainda.")
+        if st.session_state.get('usuarios', pd.DataFrame()).empty:
+            st.info("Nenhum usuário cadastrado no banco de dados.")
         else:
             with st.container(border=True):
                 user_editar = st.selectbox("Selecione o Usuário", st.session_state['usuarios']['Usuario'])
@@ -965,15 +1013,17 @@ elif menu == "🔐 Gestão de Acessos":
                         st.session_state['usuarios'].at[idx, 'Status'] = status_u
                         salvar_dados()
                         st.success("✅ Usuário atualizado!")
+                        time.sleep(1.0)
                         st.rerun()
             
             st.subheader("Usuários Cadastrados")
             st.dataframe(st.session_state['usuarios'][['Usuario', 'Perfil', 'Status']], use_container_width=True, hide_index=True)
 
     with aba_historico:
-        st.subheader("Últimos Acessos ao Sistema")
+        st.subheader("🕵️ Histórico de Acessos Recentes")
         df_logs = st.session_state.get('log_acessos', pd.DataFrame())
         if df_logs.empty:
-            st.info("Nenhum acesso registrado ainda. Os próximos logins aparecerão aqui.")
+            st.info("Nenhum acesso registrado ainda.")
         else:
-            st.dataframe(df_logs.iloc[::-1], use_container_width=True, hide_index=True)
+            # Exibe os últimos 50 logins do mais recente para o mais antigo
+            st.dataframe(df_logs.tail(50).iloc[::-1], use_container_width=True, hide_index=True)
