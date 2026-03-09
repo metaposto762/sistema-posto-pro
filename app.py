@@ -253,23 +253,25 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
     if not df.empty:
         df['Litragem'] = df['GC'] + df['GA'] + df['S10 - A'] + df['ETANOL']
         
-        # 🧠 CÉREBRO MATEMÁTICO DE HORAS (Soma multiplos intervalos na escala)
+        # 🧠 CÉREBRO MATEMÁTICO: IGNORA O ALMOÇO (Primeira Entrada até a Última Saída)
         def extrair_horas(t):
             matches = re.findall(r'(\d{1,2})h(?:(\d{1,2})m)?', str(t).lower())
-            total_horas = 0.0
             if len(matches) >= 2:
-                for i in range(0, len(matches)-1, 2):
-                    h1, m1 = matches[i]
-                    h2, m2 = matches[i+1]
-                    t1 = int(h1)*60 + (int(m1) if m1 else 0)
-                    t2 = int(h2)*60 + (int(m2) if m2 else 0)
-                    if t2 <= t1: t2 += 24*60
-                    total_horas += round((t2 - t1) / 60.0, 2)
-            return total_horas
+                # Pega sempre a primeira e a última ocorrência de hora na frase
+                h1, m1 = matches[0]
+                h2, m2 = matches[-1]
+                t1 = int(h1)*60 + (int(m1) if m1 else 0)
+                t2 = int(h2)*60 + (int(m2) if m2 else 0)
+                if t2 <= t1: t2 += 24*60 # Caso vire a noite
+                return round((t2 - t1) / 60.0, 2)
+            return 0.0
 
         if 'Turno' in df.columns:
             df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
+            
+            # 🚀 VOLTAMOS COM A REGRA DE AGRUPAR PARA MENOS DE 12 HORAS!
             df['Caixa_Visual'] = df.apply(lambda r: f"⏳ Turnos Agrupados ({r['Carga_Horaria']}h)" if r['Carga_Horaria'] < 12.0 else f"🕒 Turno: {r['Turno']}", axis=1)
+            
             df['Qtd_Caixa'] = df.groupby(['Posto', 'Caixa_Visual'])['Nome'].transform('count')
 
             for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
@@ -401,7 +403,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 12.0 | Auto-Cadastro Global")
+    st.caption("Versão 12.2 | Regra Restaurada")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -1038,7 +1040,6 @@ elif menu == "📈 Importar Planilhas":
                                 col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
                                 col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
                                 
-                                # 1. Detectar Empresa no Topo
                                 if posto_atual is None and posto_lote_escala == "🔍 Detectar Automaticamente (Topo da Planilha)":
                                     for val in [col0, col1]:
                                         val_up = val.upper()
@@ -1048,7 +1049,6 @@ elif menu == "📈 Importar Planilhas":
                                 
                                 posto_final = posto_atual if posto_atual else (posto_lote_escala if posto_lote_escala != "🔍 Detectar Automaticamente (Topo da Planilha)" else "POSTO NÃO IDENTIFICADO")
                                 
-                                # 2. Ler Horários e Nomes
                                 col0_up = col0.upper()
                                 col1_up = col1.upper()
                                 
@@ -1085,7 +1085,6 @@ elif menu == "📈 Importar Planilhas":
                         qtd_turnos_novos = 0
                         qtd_colabs_novos = 0
                         
-                        # A. Auto-Cadastro de Empresa
                         postos_existentes = st.session_state['empresas']['Posto'].astype(str).str.upper().tolist() if not st.session_state['empresas'].empty else []
                         postos_na_planilha = df_nova_escala['Posto'].unique()
                         
@@ -1098,7 +1097,6 @@ elif menu == "📈 Importar Planilhas":
                         if novas_empresas_df:
                             st.session_state['empresas'] = pd.concat([st.session_state['empresas'], pd.DataFrame(novas_empresas_df)], ignore_index=True)
 
-                        # B. Auto-Cadastro de Turnos
                         turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
                         turnos_na_planilha = df_nova_escala['Turno'].unique()
                         
@@ -1111,7 +1109,6 @@ elif menu == "📈 Importar Planilhas":
                         if novos_turnos_df:
                             st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
                             
-                        # C. Auto-Cadastro de Colaboradores
                         nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
                         nomes_processados_agora = set() 
                         novos_colabs_df = []
@@ -1147,7 +1144,6 @@ elif menu == "📈 Importar Planilhas":
                 except Exception as e:
                     st.error(f"Erro ao processar o arquivo: {e}")
 
-        # 🗑️ EXCLUIR PLANILHA DE ESCALA IMPORTADA
         if not st.session_state.get('escalas', pd.DataFrame()).empty:
             st.markdown("---")
             st.subheader("📋 Banco de Escalas Mensais")
