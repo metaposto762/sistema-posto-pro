@@ -119,8 +119,8 @@ def carregar_dados():
         st.session_state['aniversarios'] = load_ws('aniversarios', ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
         st.session_state['log_acessos'] = load_ws('log_acessos', ['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])
         
-        # NOVO BANCO DE DADOS: ESCALAS MENSAIS
-        st.session_state['escalas'] = load_ws('escalas', ['Mes', 'Nome', 'Posto', 'Turno', 'Cargo'])
+        # ABA DE ESCALAS MENSAIS
+        st.session_state['escalas'] = load_ws('escalas', ['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
         
         if st.session_state['config'].empty:
             st.session_state['config'] = pd.DataFrame({'Meta_Dia': [19.63], 'Meta_Noite': [15.00]})
@@ -152,7 +152,7 @@ def salvar_dados():
         save_ws('aniversarios', st.session_state['aniversarios'])
         save_ws('usuarios', st.session_state['usuarios'])
         save_ws('log_acessos', st.session_state['log_acessos'])
-        save_ws('escalas', st.session_state['escalas']) # Salva a nova aba de escalas
+        save_ws('escalas', st.session_state['escalas']) 
         save_ws('log', pd.DataFrame(st.session_state['processados_list']))
     except Exception as e:
         st.error(f"Erro ao salvar dados: {e}")
@@ -188,8 +188,10 @@ if not st.session_state['autenticado']:
                     else:
                         df_u = st.session_state.get('usuarios', pd.DataFrame())
                         if not df_u.empty:
+                            # Converte tudo para String para evitar erro com senhas numéricas!
                             df_u['Usuario'] = df_u['Usuario'].astype(str).str.strip()
                             df_u['Senha'] = df_u['Senha'].astype(str).str.strip()
+                            
                             busca = df_u[(df_u['Usuario'] == u) & (df_u['Senha'] == p) & (df_u['Status'] == 'Ativo')]
                             if not busca.empty:
                                 st.session_state['usuario_logado'] = busca.iloc[0]['Usuario']
@@ -202,12 +204,15 @@ if not st.session_state['autenticado']:
                             cookie_manager.set("perfil_posto", st.session_state['perfil_logado'], max_age=30*24*60*60, key="login_p")
                             
                         st.session_state['autenticado'] = True
+                        
+                        # 📡 Grava o Dispositivo junto com o Histórico!
                         agora = (datetime.utcnow() - timedelta(hours=3)).strftime("%d/%m/%Y %H:%M:%S")
                         disp = get_device()
                         novo_log = pd.DataFrame([{'Data/Hora': agora, 'Usuário': st.session_state['usuario_logado'], 'Perfil': st.session_state['perfil_logado'], 'Dispositivo': disp}])
                         
                         st.session_state['log_acessos'] = pd.concat([st.session_state.get('log_acessos', pd.DataFrame(columns=['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'])), novo_log], ignore_index=True)
                         salvar_dados()
+                        
                         time.sleep(1.0)
                         st.rerun()
                     else:
@@ -228,36 +233,36 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
     vendas_agrupadas = vendas_mes.groupby(['Nome', 'Mes'])[['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']].sum().reset_index()
     
     # ---------------------------------------------------------
-    # NOVO MOTOR DE ESCALA: Verifica se tem escala importada pro mês
+    # MOTOR DE ESCALA: Verifica se tem escala importada pro mês
     # ---------------------------------------------------------
     escala_do_mes = st.session_state.get('escalas', pd.DataFrame())
-    if not escala_do_mes.empty:
+    if not escala_do_mes.empty and 'Mes' in escala_do_mes.columns:
         escala_do_mes = escala_do_mes[escala_do_mes['Mes'] == mes_sel]
         
     if not escala_do_mes.empty:
-        # Se tem escala, usa ela como base e puxa o Cargo/Status do Cadastro Padrão
+        # Se tem escala, usa ela como base e puxa o Status do Cadastro Padrão
         df_base = escala_do_mes.copy()
-        df_cadastro = st.session_state['equipe'][['Nome', 'Cargo', 'Status']].copy()
+        df_cadastro = st.session_state['equipe'][['Nome', 'Status', 'Cargo']].copy()
         
-        # Junta a escala com o cadastro para não perder os cargos
         df_base = df_base.merge(df_cadastro, on='Nome', how='left')
         
-        # Se na planilha de escala não veio o cargo, ele usa o do cadastro fixo
+        # Se na escala veio cargo vazio, usa o cargo fixo do cadastro
         if 'Cargo_x' in df_base.columns:
             df_base['Cargo'] = df_base.apply(lambda r: r['Cargo_x'] if pd.notna(r['Cargo_x']) and str(r['Cargo_x']).strip() != "" else r['Cargo_y'], axis=1)
             df_base.drop(columns=['Cargo_x', 'Cargo_y'], inplace=True)
             
         df_base['Status'] = df_base['Status'].fillna('Ativo')
     else:
-        # Se NÃO tem escala importada pra esse mês, usa o cadastro padrão
+        # Se NÃO tem escala importada, usa o cadastro padrão
         df_base = st.session_state['equipe'].copy()
 
-    # Junta a base (Escala ou Padrão) com as vendas
+    # Junta a base com as vendas
     df = pd.merge(df_base, vendas_agrupadas, on='Nome', how='left')
     
     # Filtra ativos ou quem teve venda
     tem_vendas_neste_mes = df['Nome'].isin(vendas_agrupadas['Nome'])
-    df = df[(df['Status'] == 'Ativo') | (tem_vendas_neste_mes)].copy()
+    if 'Status' in df.columns:
+        df = df[(df['Status'] == 'Ativo') | (tem_vendas_neste_mes)].copy()
     df.fillna(0, inplace=True)
 
     if posto_sel != "Todos": df = df[df['Posto'] == posto_sel]
@@ -275,26 +280,28 @@ def calcular_dataframe_resultados(mes_sel, posto_sel):
                 return round((t2 - t1) / 60.0, 2)
             return 0.0
 
-        df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
-        df['Caixa_Visual'] = df.apply(lambda r: f"⏳ Turnos Agrupados ({r['Carga_Horaria']}h)" if r['Carga_Horaria'] < 12.0 else f"🕒 Turno: {r['Turno']}", axis=1)
-        df['Qtd_Caixa'] = df.groupby(['Posto', 'Caixa_Visual'])['Nome'].transform('count')
+        if 'Turno' in df.columns:
+            df['Carga_Horaria'] = df['Turno'].apply(extrair_horas)
+            df['Caixa_Visual'] = df.apply(lambda r: f"⏳ Turnos Agrupados ({r['Carga_Horaria']}h)" if r['Carga_Horaria'] < 12.0 else f"🕒 Turno: {r['Turno']}", axis=1)
+            df['Qtd_Caixa'] = df.groupby(['Posto', 'Caixa_Visual'])['Nome'].transform('count')
 
-        for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
-            df[f'max_caixa_{col}'] = df.groupby(['Posto', 'Caixa_Visual'])[col].transform('max')
-            df[f'max_carga_{col}'] = df.groupby(['Posto', 'Carga_Horaria'])[col].transform('max')
-            df[f'{col} %'] = df.apply(lambda r, c=col: r[c] / (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) if (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) > 0 else 0.0, axis=1)
+            for col in ['Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL']:
+                df[f'max_caixa_{col}'] = df.groupby(['Posto', 'Caixa_Visual'])[col].transform('max')
+                df[f'max_carga_{col}'] = df.groupby(['Posto', 'Carga_Horaria'])[col].transform('max')
+                df[f'{col} %'] = df.apply(lambda r, c=col: r[c] / (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) if (r[f'max_carga_{c}'] if r['Qtd_Caixa'] == 1 else r[f'max_caixa_{c}']) > 0 else 0.0, axis=1)
 
-        df['Competição (Ref.)'] = df.apply(lambda r: "Equipe do Quadro" if r['Qtd_Caixa'] > 1 else f"Competindo com Quadro de {r['Carga_Horaria']}h", axis=1)
+            df['Competição (Ref.)'] = df.apply(lambda r: "Equipe do Quadro" if r['Qtd_Caixa'] > 1 else f"Competindo com Quadro de {r['Carga_Horaria']}h", axis=1)
 
-        def define_meta_ga(cargo):
-            c_limpo = str(cargo).strip().upper()
-            if c_limpo == "CX MANHÃ": return 1800.0
-            elif c_limpo == "CX NOITE": return 2000.0
-            else: return 4000.0
-            
-        df['Meta GA (Salva-Vidas)'] = df['Cargo'].apply(define_meta_ga)
-        df['GC %'] = df.apply(lambda r: r['GC %'] + 0.10 if (r['GC %'] < 0.90 and r['GA'] >= r['Meta GA (Salva-Vidas)']) else r['GC %'], axis=1)
-        df = df.sort_values(by=['Posto', 'Carga_Horaria', 'Turno'], ascending=[True, False, True])
+            def define_meta_ga(cargo):
+                c_limpo = str(cargo).strip().upper()
+                if c_limpo == "CX MANHÃ": return 1800.0
+                elif c_limpo == "CX NOITE": return 2000.0
+                else: return 4000.0
+                
+            if 'Cargo' in df.columns:
+                df['Meta GA (Salva-Vidas)'] = df['Cargo'].apply(define_meta_ga)
+                df['GC %'] = df.apply(lambda r: r['GC %'] + 0.10 if (r['GC %'] < 0.90 and r['GA'] >= r['Meta GA (Salva-Vidas)']) else r['GC %'], axis=1)
+            df = df.sort_values(by=['Posto', 'Carga_Horaria', 'Turno'], ascending=[True, False, True])
         
     return df
 
@@ -374,7 +381,6 @@ def gerar_pdf(df, titulo, agrupar_por=None, texto_total="registros"):
         doc_erro.build([Paragraph(f"Erro ao formatar o PDF.<br/><br/>Técnico: {str(e)}", getSampleStyleSheet()['Normal'])])
         return buffer_erro.getvalue()
 
-
 # ==========================================
 # 🏠 SISTEMA PRINCIPAL (LOGADO)
 # ==========================================
@@ -408,7 +414,7 @@ with st.sidebar:
         st.session_state['ignorar_cookie'] = True 
         st.rerun()
     st.markdown("---")
-    st.caption("Versão 9.1 | Escala Master")
+    st.caption("Versão 10.0 | Automação Total")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -583,7 +589,7 @@ elif menu == "🎂 Aniversariantes":
     aba_lista, aba_importar = st.tabs(["🎉 Lista do Mês", "📥 Importar Base"])
     
     with aba_lista:
-        df_niver = st.session_state['aniversarios'].copy()
+        df_niver = st.session_state.get('aniversarios', pd.DataFrame()).copy()
         if not df_niver.empty:
             df_equipe = st.session_state['equipe'][['Nome', 'Posto']].copy()
             df_equipe['Nome'] = df_equipe['Nome'].astype(str).str.strip().str.upper()
@@ -679,7 +685,7 @@ elif menu == "🎂 Aniversariantes":
 
                     if lista_dfs:
                         df_final = pd.concat(lista_dfs)
-                        st.session_state['aniversarios'] = pd.concat([st.session_state['aniversarios'], df_final]).drop_duplicates(subset=['Nome'], keep='last')
+                        st.session_state['aniversarios'] = pd.concat([st.session_state.get('aniversarios', pd.DataFrame()), df_final]).drop_duplicates(subset=['Nome'], keep='last')
                         salvar_dados()
                         st.success("✅ Registros processados e salvos com sucesso!")
                         time.sleep(1)
@@ -688,7 +694,7 @@ elif menu == "🎂 Aniversariantes":
                 except Exception as e: st.error(f"Erro: {e}")
                 
             st.markdown("---")
-            if not st.session_state['aniversarios'].empty and st.button("🗑️ Limpar toda a base"):
+            if not st.session_state.get('aniversarios', pd.DataFrame()).empty and st.button("🗑️ Limpar toda a base"):
                 st.session_state['aniversarios'] = pd.DataFrame(columns=['Posto', 'Nome', 'Gênero', 'Data de Nascimento'])
                 salvar_dados()
                 st.rerun()
@@ -866,11 +872,11 @@ elif menu == "👤 Cadastro Colaborador":
                     time.sleep(1)
                     st.rerun()
 
-# --- TELA: IMPORTAR PLANILHAS (COM ABA DE ESCALAS) ---
+# --- TELA: IMPORTAR PLANILHAS (COM AUTO-CADASTRO) ---
 elif menu == "📈 Importar Planilhas":
     st.header("📈 Importação de Resultados e Escalas")
     
-    aba_vendas, aba_escala = st.tabs(["📊 Vendas e Metas", "📅 Escala Mensal"])
+    aba_vendas, aba_escala = st.tabs(["📊 Vendas e Metas", "📅 Escala Mensal Inteligente"])
     
     with aba_vendas:
         col_u, col_h = st.columns([1.5, 1])
@@ -984,61 +990,125 @@ elif menu == "📈 Importar Planilhas":
                 else:
                     st.info("Nenhum arquivo no histórico.")
 
-    # NOVA FUNCIONALIDADE: IMPORTAR ESCALA
+    # 🚀 O NOVO MOTOR DE AUTO-CADASTRO E LEITURA DE ESCALA 12x36
     with aba_escala:
-        st.info("A sua planilha de Escala no Excel precisa ter obrigatoriamente as colunas: **NOME**, **POSTO** e **TURNO**. A coluna **CARGO** é opcional.")
+        st.info("O sistema lê o seu **Relatório Visual 12x36** e, se achar um **Nome** ou **Turno** novo, ele cadastra sozinho no banco de dados!")
         
         with st.container(border=True):
-            mes_ref_escala = st.text_input("Mês da Escala (Ex: 03/2026)", value=datetime.today().strftime("%m/%Y"))
+            col1, col2 = st.columns(2)
+            mes_ref_escala = col1.text_input("Mês da Escala (Ex: 03/2026)", value=datetime.today().strftime("%m/%Y"))
+            posto_lote_escala = col2.selectbox("Vincular a qual Posto?", st.session_state['empresas']['Posto'] if not st.session_state['empresas'].empty else ["Sem Empresa"])
+            
             arq_escala = st.file_uploader("Upload da Planilha de Escala", type=["xlsx", "xls", "csv"], key="up_escala")
             
-            if arq_escala and st.button("🚀 Importar Escala do Mês", type="primary"):
+            if arq_escala and st.button("🚀 Processar e Auto-Cadastrar", type="primary"):
                 try:
-                    df_e = pd.read_excel(arq_escala) if arq_escala.name.endswith(('.xlsx', '.xls')) else pd.read_csv(arq_escala)
-                    df_e.columns = df_e.columns.astype(str).str.strip().str.upper()
+                    df_e = pd.read_excel(arq_escala, header=None) if arq_escala.name.endswith(('.xlsx', '.xls')) else pd.read_csv(arq_escala, header=None, sep=None, engine='python', encoding='utf-8-sig')
                     
-                    c_n = next((c for c in df_e.columns if 'NOME' in c), None)
-                    c_p = next((c for c in df_e.columns if 'POSTO' in c or 'EMPRESA' in c), None)
-                    c_t = next((c for c in df_e.columns if 'TURNO' in c or 'HORA' in c), None)
-                    c_c = next((c for c in df_e.columns if 'CARGO' in c), None)
+                    novas_escalas = []
                     
-                    if c_n and c_p and c_t:
-                        df_e = df_e.dropna(subset=[c_n])
-                        df_nova_escala = pd.DataFrame()
-                        df_nova_escala['Mes'] = [mes_ref_escala] * len(df_e)
-                        df_nova_escala['Nome'] = df_e[c_n].astype(str).str.strip().str.upper()
-                        df_nova_escala['Posto'] = df_e[c_p].astype(str).str.strip().str.upper()
-                        df_nova_escala['Turno'] = df_e[c_t].astype(str).str.strip().str.upper()
-                        
-                        if c_c:
-                            df_nova_escala['Cargo'] = df_e[c_c].astype(str).str.strip().str.upper()
-                        else:
-                            df_nova_escala['Cargo'] = ""
+                    for idx, row in df_e.iterrows():
+                        if len(row) > 1:
+                            col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
+                            col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
                             
-                        # Limpa qualquer escala antiga salva para ESTE mês específico
-                        st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_ref_escala]
+                            # Detecta se a linha é de horário
+                            if "H" in col0.upper() and col1 != "":
+                                cargo = "Frentista"
+                                if "CX DIA" in col0.upper(): cargo = "CX MANHÃ"
+                                elif "CX NOITE" in col0.upper(): cargo = "CX NOITE"
+                                
+                                turno_limpo = col0.upper().replace("- CX DIA", "").replace("CX DIA", "").replace("- CX NOITE", "").replace("CX NOITE", "").strip()
+                                
+                                # Verifica dupla (Ímpar/Par)
+                                if "-" in col1 and "IMPAR" not in col1.upper():
+                                    nomes = col1.split("-")
+                                    if len(nomes) >= 2:
+                                        nome_impar = nomes[0].strip().upper()
+                                        nome_par = nomes[1].strip().upper()
+                                        
+                                        if nome_impar: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_impar, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Ímpar'})
+                                        if nome_par: novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_par, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Par'})
+                                
+                                # Funcionário sozinho
+                                elif "IMPAR" not in col1.upper() and "-" not in col1:
+                                    nome_unico = col1.strip().upper()
+                                    if nome_unico.lower() not in ["nan", ""]:
+                                        novas_escalas.append({'Mes': mes_ref_escala, 'Nome': nome_unico, 'Posto': posto_lote_escala, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diarista/Mensalista'})
+                                    
+                    if novas_escalas:
+                        df_nova_escala = pd.DataFrame(novas_escalas)
                         
-                        # Salva a nova escala no banco
+                        # 1. SALVA A ESCALA DO MÊS
+                        if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
+                        if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
+                            st.session_state['escalas'] = st.session_state['escalas'][st.session_state['escalas']['Mes'] != mes_ref_escala]
                         st.session_state['escalas'] = pd.concat([st.session_state['escalas'], df_nova_escala], ignore_index=True)
+                        
+                        # ====================================================
+                        # 2. MOTOR DE AUTO-CADASTRO (TURNOS E COLABORADORES)
+                        # ====================================================
+                        qtd_turnos_novos = 0
+                        qtd_colabs_novos = 0
+                        
+                        # A. Auto-Cadastro de Turnos
+                        turnos_existentes = st.session_state['turnos']['Turno'].astype(str).str.upper().tolist() if not st.session_state['turnos'].empty else []
+                        turnos_na_planilha = df_nova_escala['Turno'].unique()
+                        
+                        novos_turnos_df = []
+                        for t in turnos_na_planilha:
+                            if t not in turnos_existentes:
+                                novos_turnos_df.append({'Turno': t, 'Status': 'Ativo'})
+                                qtd_turnos_novos += 1
+                                
+                        if novos_turnos_df:
+                            st.session_state['turnos'] = pd.concat([st.session_state['turnos'], pd.DataFrame(novos_turnos_df)], ignore_index=True)
+                            
+                        # B. Auto-Cadastro de Colaboradores
+                        nomes_existentes = st.session_state['equipe']['Nome'].astype(str).str.upper().tolist() if not st.session_state['equipe'].empty else []
+                        nomes_processados_agora = set() 
+                        novos_colabs_df = []
+                        
+                        for _, row in df_nova_escala.iterrows():
+                            nome_val = row['Nome']
+                            if nome_val not in nomes_existentes and nome_val not in nomes_processados_agora:
+                                novos_colabs_df.append({
+                                    'Posto': row['Posto'],
+                                    'Turno': row['Turno'],
+                                    'Cargo': row['Cargo'],
+                                    'Nome': nome_val,
+                                    'Status': 'Ativo'
+                                })
+                                nomes_processados_agora.add(nome_val)
+                                qtd_colabs_novos += 1
+                                
+                        if novos_colabs_df:
+                            st.session_state['equipe'] = pd.concat([st.session_state['equipe'], pd.DataFrame(novos_colabs_df)], ignore_index=True)
+
+                        # Salva todas as abas no Google Sheets de uma vez
                         salvar_dados()
                         
-                        st.success(f"✅ Escala de {mes_ref_escala} importada com sucesso ({len(df_nova_escala)} funcionários cadastrados no mês)!")
-                        time.sleep(1.5)
+                        mensagem_final = f"✅ Escala de {mes_ref_escala} importada! ({len(novas_escalas)} registros)."
+                        if qtd_turnos_novos > 0: mensagem_final += f" ⏰ {qtd_turnos_novos} novos turnos."
+                        if qtd_colabs_novos > 0: mensagem_final += f" 👤 {qtd_colabs_novos} novos colaboradores."
+                        
+                        st.success(mensagem_final)
+                        time.sleep(3) 
                         st.rerun()
                     else:
-                        st.error("❌ O sistema não encontrou as colunas NOME, POSTO e TURNO na sua planilha. Verifique o cabeçalho.")
+                        st.warning("⚠️ Não encontrei o padrão de horários e nomes na planilha. Revise o arquivo.")
                 except Exception as e:
-                    st.error(f"Erro ao ler a planilha: {e}")
-                    
+                    st.error(f"Erro ao processar o arquivo: {e}")
+
         if not st.session_state.get('escalas', pd.DataFrame()).empty:
             st.markdown("---")
-            st.subheader("📋 Escalas Salvas no Banco de Dados")
-            st.dataframe(st.session_state['escalas'], use_container_width=True, hide_index=True)
+            st.subheader("📋 Banco de Escalas Mensais")
+            st.dataframe(st.session_state['escalas'].iloc[::-1], use_container_width=True, hide_index=True)
 
-# --- GESTÃO DE ACESSOS ---
+# --- TELA: GESTÃO DE ACESSOS ---
 elif menu == "🔐 Gestão de Acessos":
     st.header("🔐 Gestão de Usuários")
-    st.markdown("Crie usuários e acompanhe o histórico de acessos da sua equipe.")
+    st.markdown("Crie usuários e acompanhe o histórico e os dispositivos usados pela sua equipe.")
     
     aba_novo_u, aba_editar_u, aba_historico = st.tabs(["🆕 Novo Usuário", "📋 Editar / Inativar", "🕵️ Histórico de Logins"])
     
@@ -1054,20 +1124,22 @@ elif menu == "🔐 Gestão de Acessos":
                     
                 if st.form_submit_button("Criar Usuário", type="primary"):
                     if novo_login and nova_senha:
-                        if novo_login in st.session_state['usuarios']['Usuario'].values:
-                            st.error("Esse login já existe!")
+                        usuarios_existentes = st.session_state.get('usuarios', pd.DataFrame())
+                        if not usuarios_existentes.empty and novo_login in usuarios_existentes['Usuario'].astype(str).values:
+                            st.error("⚠️ Esse login já existe!")
                         else:
-                            st.session_state['usuarios'] = pd.concat([st.session_state['usuarios'], pd.DataFrame([{'Usuario': novo_login, 'Senha': nova_senha, 'Perfil': novo_perfil, 'Status': 'Ativo'}])], ignore_index=True)
+                            novo_usr_df = pd.DataFrame([{'Usuario': novo_login, 'Senha': nova_senha, 'Perfil': novo_perfil, 'Status': 'Ativo'}])
+                            st.session_state['usuarios'] = pd.concat([st.session_state.get('usuarios', pd.DataFrame()), novo_usr_df], ignore_index=True)
                             salvar_dados()
-                            st.success(f"✅ Usuário {novo_login} criado com sucesso!")
-                            time.sleep(1)
+                            st.success(f"✅ Usuário '{novo_login}' criado com sucesso!")
+                            time.sleep(1.5) 
                             st.rerun()
                     else:
-                        st.warning("Preencha o Login e a Senha.")
+                        st.warning("⚠️ Preencha o Login e a Senha.")
 
     with aba_editar_u:
-        if st.session_state['usuarios'].empty:
-            st.info("Nenhum usuário cadastrado no banco de dados ainda.")
+        if st.session_state.get('usuarios', pd.DataFrame()).empty:
+            st.info("Nenhum usuário cadastrado no banco de dados.")
         else:
             with st.container(border=True):
                 user_editar = st.selectbox("Selecione o Usuário", st.session_state['usuarios']['Usuario'])
@@ -1090,16 +1162,17 @@ elif menu == "🔐 Gestão de Acessos":
                         st.session_state['usuarios'].at[idx, 'Status'] = status_u
                         salvar_dados()
                         st.success("✅ Usuário atualizado!")
-                        time.sleep(1)
+                        time.sleep(1.0)
                         st.rerun()
             
             st.subheader("Usuários Cadastrados")
             st.dataframe(st.session_state['usuarios'][['Usuario', 'Perfil', 'Status']], use_container_width=True, hide_index=True)
 
     with aba_historico:
-        st.subheader("Últimos Acessos ao Sistema")
+        st.subheader("🕵️ Histórico de Acessos Recentes")
         df_logs = st.session_state.get('log_acessos', pd.DataFrame())
         if df_logs.empty:
-            st.info("Nenhum acesso registrado ainda. Os próximos logins aparecerão aqui.")
+            st.info("Nenhum acesso registrado ainda.")
         else:
+            # Exibe os últimos 50 logins do mais recente para o mais antigo
             st.dataframe(df_logs.tail(50).iloc[::-1], use_container_width=True, hide_index=True)
