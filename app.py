@@ -354,8 +354,17 @@ with st.sidebar:
     if st.button("🚪 Sair do Sistema", use_container_width=True):
         with st.spinner("Saindo com segurança..."):
             if cookie_manager is not None:
-                cookie_manager.delete("user_posto", key="del_u")
-                cookie_manager.delete("perfil_posto", key="del_p")
+                # Tenta deletar. Se o cookie já sumiu, ele ignora o erro e segue o baile!
+                try:
+                    cookie_manager.delete("user_posto", key="del_u")
+                except KeyError:
+                    pass
+                
+                try:
+                    cookie_manager.delete("perfil_posto", key="del_p")
+                except KeyError:
+                    pass
+                    
                 time.sleep(1.0) # Freio para garantir que o navegador jogou a chave fora
             
             # Limpa toda a memória da sessão como uma bomba nuclear!
