@@ -661,8 +661,7 @@ elif menu == "📅 Escala Mensal":
                                 elif "IMPAR" not in col1_up and "-" not in col1_up:
                                     nome_unico = col1_up.strip()
                                     if nome_unico not in ["NAN", ""]: novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
-                                
-            if novas_escalas:
+                                 if novas_escalas:
                 df_nova_escala = pd.DataFrame(novas_escalas)
                 if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
                 if not st.session_state['escalas'].empty and 'Mes' in st.session_state['escalas'].columns:
