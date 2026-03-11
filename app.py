@@ -78,6 +78,33 @@ if not st.session_state['autenticado'] and cookie_manager is not None:
             st.rerun()
 
 # ==========================================
+# 🛡️ INICIALIZAÇÃO SEGURA (ANTI-KEYERROR)
+# ==========================================
+# Se a API falhar, o sistema usa essas "gavetas vazias" e evita o travamento total.
+tabelas_padrao = {
+    'empresas': ['Posto', 'Status'],
+    'turnos': ['Turno', 'Status'],
+    'equipe': ['Posto', 'Turno', 'Cargo', 'Nome', 'Status'],
+    'usuarios': ['Usuario', 'Senha', 'Perfil', 'Status'],
+    'vendas': ['Arquivo', 'Nome', 'Mes', 'Atendimentos', 'GC', 'GA', 'S10 - A', 'ETANOL'],
+    'processados_list': [],
+    'config': pd.DataFrame({'Meta_Dia': [19.63], 'Meta_Noite': [15.00]}),
+    'aniversarios': ['Posto', 'Nome', 'Gênero', 'Data de Nascimento'],
+    'log_acessos': ['Data/Hora', 'Usuário', 'Perfil', 'Dispositivo'],
+    'escalas': ['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe']
+}
+
+for chave, padrao in tabelas_padrao.items():
+    if chave not in st.session_state:
+        if isinstance(padrao, list):
+            if chave == 'processados_list':
+                st.session_state[chave] = padrao
+            else:
+                st.session_state[chave] = pd.DataFrame(columns=padrao)
+        else:
+            st.session_state[chave] = padrao
+
+# ==========================================
 # 📡 RASTREADOR DE DISPOSITIVOS
 # ==========================================
 def get_device():
@@ -138,7 +165,9 @@ def carregar_dados():
                 st.session_state['vendas'][col] = pd.to_numeric(st.session_state['vendas'][col], errors='coerce').fillna(0)
             
     except Exception as e:
-        st.error(f"Erro de Conexão Google: Aguarde um minuto, o limite de segurança da API foi atingido. ({e})")
+        # 🚀 NOVO COMPORTAMENTO SEGURO: Interrompe tudo elegantemente em vez de quebrar!
+        st.error(f"⚠️ Limite do Google Sheets atingido (muitas atualizações seguidas). Por favor, aguarde 1 minuto e tente novamente.")
+        st.stop()
 
 def salvar_dados(abas_para_salvar=None):
     try:
@@ -177,7 +206,7 @@ def salvar_dados(abas_para_salvar=None):
         if 'escalas' in abas_para_salvar: save_ws('escalas', st.session_state['escalas'])
         if 'log' in abas_para_salvar: save_ws('log', pd.DataFrame(st.session_state['processados_list']))
     except Exception as e:
-        st.error(f"Erro ao salvar dados (Aguarde o reset da API): {e}")
+        st.warning(f"⚠️ Servidor do Google ocupado. Algumas alterações podem não ter sido salvas. Tente de novo em 1 minuto.")
 
 # ==========================================
 # 🔓 TELA DE LOGIN
@@ -416,7 +445,6 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
         
-    # 🚨 BOTÃO DE SAIR COM KEYS EXCLUSIVAS (Anti-Erro)
     if st.button("🚪 Sair do Sistema", type="secondary", use_container_width=True):
         st.session_state['sair_solicitado'] = True
         if cookie_manager is not None:
@@ -436,7 +464,7 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.caption("Versão 16.5 | Indentação Perfeita 🚀")
+    st.caption("Versão 17.0 | Safe Boot 🛡️")
 
 # --- TELA: PAINEL GERAL ---
 if menu == "📊 Painel Geral":
@@ -660,7 +688,6 @@ elif menu == "📅 Escala Mensal":
                                     nome_unico = col1_up.strip()
                                     if nome_unico not in ["NAN", ""]: novas_escalas.append({'Mes': mes_final, 'Nome': nome_unico, 'Posto': posto_final, 'Turno': turno_limpo, 'Cargo': cargo, 'Equipe': 'Diário / 6h'})
                                 
-                # ESTE BLOCO ESTÁ AGORA DENTRO DO TRY E CORRETAMENTE INDENTADO!
                 if novas_escalas:
                     df_nova_escala = pd.DataFrame(novas_escalas)
                     if 'escalas' not in st.session_state: st.session_state['escalas'] = pd.DataFrame(columns=['Mes', 'Nome', 'Posto', 'Turno', 'Cargo', 'Equipe'])
